@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -331,36 +332,41 @@ func generateTrayIcon(pct float64) []byte {
 	// 透明背景
 	draw.Draw(img, img.Bounds(), &image.Uniform{color.Transparent}, image.Point{}, draw.Src)
 
-	// 1. 绘制深灰底环 (半径 28, 粗度 5)
 	cx, cy := 32.0, 32.0
 	rOuter := 30.0
 	rInner := 23.0
+	cTrack := color.RGBA{28, 33, 46, 255}       // 暗灰底轨
+	cProgress := color.RGBA{56, 189, 248, 255} // 亮青蓝发光进度
+
+	// 1. 顺时针进度角度上限 (从 12 点钟 0° 开始)
+	limitAngle := (pct / 100.0) * 360.0
+
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			dx := float64(x) - cx
 			dy := float64(y) - cy
 			dist := dx*dx + dy*dy
+
+			// 处于圆环带内
 			if dist <= rOuter*rOuter && dist >= rInner*rInner {
-				img.Set(x, y, color.RGBA{30, 35, 48, 255})
+				// 计算相对于 12 点钟方向顺时针的夹角 [0, 360)
+				angleRad := math.Atan2(dx, -dy)
+				angleDeg := angleRad * (180.0 / math.Pi)
+				if angleDeg < 0 {
+					angleDeg += 360.0
+				}
+
+				if angleDeg <= limitAngle {
+					img.Set(x, y, cProgress)
+				} else {
+					img.Set(x, y, cTrack)
+				}
 			}
 		}
 	}
 
-	// 2. 绘制青蓝进度环 (按百分比角度填充)
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx := float64(x) - cx
-			dy := float64(y) - cy
-			dist := dx*dx + dy*dy
-			if dist <= rOuter*rOuter && dist >= rInner*rInner {
-				img.Set(x, y, color.RGBA{56, 189, 248, 255})
-			}
-		}
-	}
-
-	// 3. 在中央绘制高对比度的大号白色数字矩阵
+	// 2. 在中央绘制高对比度的大号白色数字矩阵
 	txt := fmt.Sprintf("%d", int(pct))
-	// 5x7 像素点阵字体绘制大号数字
 	drawDigits(img, txt, int(cx), int(cy))
 
 	var buf bytes.Buffer
