@@ -51,6 +51,7 @@ var (
 	mPlan        *systray.MenuItem
 	mExpiry      *systray.MenuItem
 	mReset       *systray.MenuItem
+	mAutostart   *systray.MenuItem
 	mRefresh     *systray.MenuItem
 	mQuit        *systray.MenuItem
 )
@@ -419,6 +420,62 @@ func drawDigits(img *image.RGBA, s string, centerX, centerY int) {
 	}
 }
 
+
+
+func getAutostartDesktopPath() string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/root"
+	}
+	return filepath.Join(home, ".config", "autostart", "codex-monitor.desktop")
+}
+
+func isAutostartEnabled() bool {
+	p := getAutostartDesktopPath()
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func toggleAutostart() bool {
+	p := getAutostartDesktopPath()
+	if isAutostartEnabled() {
+		_ = os.Remove(p)
+		return false
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = os.Args[0]
+	}
+	if absP, err := filepath.Abs(execPath); err == nil {
+		execPath = absP
+	}
+
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	content := fmt.Sprintf(`[Desktop Entry]
+Type=Application
+Name=Codex Monitor
+Exec=%s -d
+Icon=utilities-system-monitor
+Terminal=false
+X-GNOME-Autostart-enabled=true
+`, execPath)
+
+	_ = os.WriteFile(p, []byte(content), 0644)
+	return true
+}
+
+func updateAutostartMenuItem() {
+	if mAutostart == nil {
+		return
+	}
+	if isAutostartEnabled() {
+		mAutostart.SetTitle("✅ 开机自启动 (已开启)")
+	} else {
+		mAutostart.SetTitle("⬜ 开机自启动 (未开启)")
+	}
+}
+
 func onReady() {
 	systray.SetTitle("⚡ --")
 	systray.SetTooltip("Codex Monitor (Linux Native Standalone)")
@@ -441,6 +498,10 @@ func onReady() {
 
 	systray.AddSeparator()
 	mRefresh = systray.AddMenuItem("🔄 立即刷新", "立即拉取最新用量")
+	mAutostart = systray.AddMenuItem("⬜ 开机自启动", "切换登录桌面时自动启动")
+	updateAutostartMenuItem()
+
+	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("❌ 退出", "退出 Codex Monitor")
 
 	updateData := func() {
@@ -469,6 +530,9 @@ func onReady() {
 				updateData()
 			case <-mRefresh.ClickedCh:
 				go updateData()
+			case <-mAutostart.ClickedCh:
+				toggleAutostart()
+				updateAutostartMenuItem()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				os.Exit(0)
