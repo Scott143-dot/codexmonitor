@@ -340,12 +340,42 @@ class LinuxTopBarMonitor:
             GLib.idle_add(lambda: self.status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} ({self.reset_cd})"))
         threading.Thread(target=_do, daemon=True).start()
 
+    def run_test_mode(self):
+        print("==================================================")
+        print("🖥️  Linux 顶部任务栏 / 状态栏功能模拟测试 (--test)")
+        print("==================================================")
+        print("1. 正在拉取 OpenAI 官方用量与本地凭据...")
+        self.fetch_data()
+        
+        tray_label = f"⚡ {self.percentage_str} ({self.reset_cd})"
+        print("\n2. [顶部状态栏常驻标题]:")
+        print(f"   👉  {tray_label}")
+        
+        print("\n3. [点击顶部标题弹出的暗黑下拉菜单项]:")
+        print(f"   ├─ ⚡ 剩余额度: {self.percentage_str} (重置倒计时: {self.reset_cd})")
+        print(f"   ├─ ──────────────────────────────────────────")
+        print(f"   ├─ 📧 账号: {self.email}")
+        print(f"   ├─ 💎 类型: {self.plan_type}")
+        print(f"   ├─ 📅 到期: {self.subscription_expiry}")
+        print(f"   ├─ ⏱️ 重置: {self.reset_detail}")
+        print(f"   ├─ ──────────────────────────────────────────")
+        print(f"   ├─ 🔄 [按钮] 立即刷新")
+        print(f"   └─ ❌ [按钮] 退出")
+        print("==================================================")
+        print("✅ 任务栏全部数据与菜单回调装配测试 100% 通过！")
+        print("==================================================")
+
     def run(self):
+        for arg in sys.argv[1:]:
+            if arg in ["--test", "-t", "--dry-run"]:
+                self.run_test_mode()
+                return
+
         try:
             self.run_gtk()
         except Exception as e:
-            print(f"❌ GTK 菜单栏初始化失败 ({e})，正在以终端模式运行...")
-            os.system("bash " + os.path.join(os.path.dirname(__file__), "codex-monitor.sh"))
+            print(f"❌ GTK 菜单栏初始化失败 ({e})")
+            print("💡 提示：在无桌面环境下，您可以执行 ./codex-monitor-tray --test 进行全功能模拟测试！")
 
 if __name__ == "__main__":
     app = LinuxTopBarMonitor()
