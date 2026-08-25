@@ -1,7 +1,7 @@
 # Codex Monitor
 
-> A lightweight desktop monitor for OpenAI Codex / ChatGPT Plus & Pro quota tracking.  
-> 极轻量 (~40 KB) 的 OpenAI Codex / ChatGPT Plus & Pro 桌面用量监控悬浮标。
+> A lightweight desktop & CLI monitor for OpenAI Codex / ChatGPT Plus & Pro quota tracking.  
+> 极轻量 (~40 KB) 的 OpenAI Codex / ChatGPT Plus & Pro 桌面与终端用量监控悬浮标。
 
 [English](#english) | [中文](#中文)
 
@@ -11,92 +11,112 @@
 ## 中文
 
 ### 简介
-**Codex Monitor** 是一个用 C# WPF (.NET 4.8) 编写的桌面悬浮监控工具。它直接读取本地 `~/.codex/auth.json` 登录凭据，实时获取剩余用量额度、重置倒计时与订阅到期时间。
+**Codex Monitor** 是一款专为 OpenAI Codex / ChatGPT 订阅用户打造的轻量监控工具。直接读取本地 `~/.codex/auth.json` 登录凭据（支持 `cc-switch` 订阅管理器），实时展示剩余用量百分比、7天重置倒计时与账号订阅到期日。
 
 ### 特性
-- **轻量独立**：单文件仅 ~40 KB，基于 Windows 内置 `.NET 4.8`，免安装即开即用。
-- **悬浮与磁吸形态**：
-  - **悬浮圆环** (72x72 px)：显示剩余用量与倒计时。
-  - **贴边胶囊** (42x96 px)：自动吸附屏幕边缘。
-- **三种拖拽尾迹特效**：
-  - 等离子闪电 (裂空电弧)
-  - 东方水墨 (交织水晕)
-  - 七彩极光 (流光天幕)
-- **三种渐变配色**：蓝靛紫 / 青碧翠 / 白金钛。
-- **开机自启**：右键菜单一键开启/关闭（写入当前用户注册表）。
-- **多平台支持**：同时提供 Linux / Docker 终端监控脚本（位于 `linux/` 目录）。
+- **Windows 原生悬浮球**：
+  - 单文件仅 ~40 KB，基于 Windows 内置 `.NET 4.8`，免安装即开即用。
+  - GPU DirectX 硬件加速渲染，支持**悬浮圆环 (72x72)** 与 **贴边胶囊 (42x96)** 平滑形变。
+  - 支持 3 种拖拽流光尾迹（等离子闪电、东方水墨、七彩极光）与 3 种渐变配色（蓝靛紫、青碧翠、白金钛）。
+  - 支持右键菜单一键开启/关闭开机自启。
+- **Linux 桌面与终端全能支持**：
+  - **桌面图形悬浮球** (`linux/codex_monitor_gui.py`)：基于 Python 官方标准库 Tkinter 打造，零外部依赖，支持桌面置顶悬浮、自由拖拽与悬停卡片。
+  - **独立二进制执行程序** (`linux/codex-monitor`)：静态编译的 ELF 二进制文件，直接运行。
+  - **终端彩色仪表盘** (`linux/codex-monitor.sh`)：零依赖 Shell 脚本，支持 Docker 容器与服务器环境。
 
-### 使用说明
+---
 
-#### Windows
-直接运行 `CodexMonitor.exe`：
+### 使用指南
+
+#### 🪟 Windows 桌面端
+直接双击运行 **`CodexMonitor.exe`**：
 - **左键单击**：即刻刷新用量。
-- **左键拖拽**：移动位置，移至屏幕边缘自动吸附。
+- **左键拖拽**：在屏幕上移动，移至屏幕边缘自动吸附为胶囊形态。
 - **右键菜单**：切换配色主题、尾迹特效、开关开机自启。
 
-#### Linux / Docker 终端
-仓库已内置静态编译好的 Linux 独立二进制可执行文件 **`linux/codex-monitor`**（零依赖，直接运行）：
+#### 🐧 Linux 桌面端 (Ubuntu / Debian / Fedora)
+在终端运行一键启动脚本（自动安装应用图标并拉起桌面悬浮球）：
 ```bash
-# 方案 A：直接运行打包好的 Linux 二进制程序 (推荐)
-chmod +x linux/codex-monitor
-./linux/codex-monitor
-# 守护模式
-./linux/codex-monitor --watch
-
-# 方案 B：Linux 桌面原生 GUI 悬浮球 (需图形桌面环境)
+bash linux/install_and_run_ubuntu.sh
+```
+或直接运行 Python 桌面悬浮球：
+```bash
 python3 linux/codex_monitor_gui.py
-
-# 方案 C：纯 Shell 脚本
-bash linux/codex-monitor.sh
 ```
 
-### 源码编译 (Windows)
-双击根目录下的 `build.bat` 即可调用系统自带的 `csc.exe` 完成快速编译。
+#### 🖥️ Linux 服务器 / Docker 容器端
+```bash
+# 运行打包好的独立可执行程序
+chmod +x linux/codex-monitor
+./linux/codex-monitor
 
+# 实时守护监控模式 (每 60 秒自动刷新)
+./linux/codex-monitor --watch
+```
+
+---
+
+### 源码构建
+
+- **Windows**：双击 `build.bat`，脚本调用 Windows 内置 `csc.exe` 瞬间完成极速编译生成 `CodexMonitor.exe`。
+- **Linux ELF 二进制**：在安装了 Go 的环境中执行 `CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o linux/codex-monitor linux/codex_monitor.go`。
+
+---
 ---
 
 <a name="english"></a>
 ## English
 
 ### Introduction
-**Codex Monitor** is a lightweight desktop floating monitor written in C# WPF (.NET 4.8). It reads local `~/.codex/auth.json` credentials to provide real-time remaining quota percentages, reset countdowns, and subscription expiration details.
+**Codex Monitor** is a lightweight desktop and CLI quota monitor for OpenAI Codex and ChatGPT Plus/Pro users. It reads local `~/.codex/auth.json` credentials (fully compatible with `cc-switch`) to display remaining quota percentages, 7-day reset countdowns, and subscription details in real time.
 
 ### Features
-- **Ultra-Lightweight**: Single standalone executable (~40 KB), zero external dependencies on Windows 10/11.
-- **Dual Form Factor**:
-  - **Floating Ring** (72x72 px): Displays percentage and countdown.
-  - **Edge-Docked Capsule** (42x96 px): Automatically snaps to screen edges.
-- **3 Visual Trail Effects**:
-  - Plasma Lightning
-  - Traditional Ink Wash
-  - Prismatic Aurora
-- **3 Gradient Color Themes**: Blue-Indigo-Violet, Cyan-Emerald-Forest, Platinum-Gold-Titanium.
-- **Auto-Start**: Toggle via context menu (writes to current user registry `HKCU`).
-- **Cross-Platform**: Includes zero-dependency Linux / Docker CLI scripts in `linux/`.
+- **Windows Desktop Widget**:
+  - Standalone single executable (~40 KB), built on native `.NET 4.8` with zero dependencies.
+  - GPU DirectX hardware acceleration with smooth morphing between **Floating Ring (72x72)** and **Docked Capsule (42x96)**.
+  - 3 visual trail effects (Lightning, Ink Wash, Aurora) and 3 gradient color themes.
+  - Auto-start on boot toggle via context menu.
+- **Full Linux Desktop & CLI Suite**:
+  - **Desktop GUI Widget** (`linux/codex_monitor_gui.py`): Built with Python standard library Tkinter (zero external dependencies), draggable floating widget with hover tooltip card.
+  - **Standalone ELF Binary** (`linux/codex-monitor`): Precompiled static Linux binary, runs anywhere without runtime.
+  - **CLI Terminal Dashboard** (`linux/codex-monitor.sh`): Pure Shell script for headless Docker & SSH environments.
+
+---
 
 ### Usage
 
-#### Windows
-Run `CodexMonitor.exe`:
-- **Left Click**: Refresh quota immediately.
-- **Left Drag**: Move widget around; release near edges to dock.
-- **Right Click**: Open menu to change themes, VFX, or toggle auto-start.
+#### 🪟 Windows
+Simply run **`CodexMonitor.exe`**:
+- **Left Click**: Instant quota refresh.
+- **Left Drag**: Move freely; snaps to screen edges.
+- **Right Click**: Open menu to change themes, trails, or toggle auto-start.
 
-#### Linux / Docker CLI
-Run in terminal:
+#### 🐧 Linux Desktop (Ubuntu / Debian / Fedora)
+Run the desktop installer script:
 ```bash
-# Pure Shell script (requires curl)
-bash linux/codex-monitor.sh
-
-# Python 3 CLI
-python3 linux/codex_monitor.py
-
-# Python 3 Daemon watch mode (refreshes every 60s)
-python3 linux/codex_monitor.py --watch
+bash linux/install_and_run_ubuntu.sh
+```
+Or launch the GUI floating widget directly:
+```bash
+python3 linux/codex_monitor_gui.py
 ```
 
-### Build from Source (Windows)
-Run `build.bat` to compile with the built-in Windows `csc.exe` compiler.
+#### 🖥️ Linux Server / Docker
+```bash
+# Run standalone ELF executable
+chmod +x linux/codex-monitor
+./linux/codex-monitor
+
+# Real-time daemon mode (refreshes every 60s)
+./linux/codex-monitor --watch
+```
+
+---
+
+### Build from Source
+
+- **Windows**: Run `build.bat` to compile with the built-in Windows `csc.exe` compiler.
+- **Linux Binary**: Run `CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o linux/codex-monitor linux/codex_monitor.go`.
 
 ---
 
