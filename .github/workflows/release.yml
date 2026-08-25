@@ -27,7 +27,7 @@ jobs:
       - name: Compile Windows WPF Application
         shell: pwsh
         run: |
-          & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /t:winexe /o+ /platform:anycpu /lib:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Xaml.dll /r:WindowsBase.dll /r:PresentationCore.dll /r:PresentationFramework.dll /out:CodexMonitor.exe src\*.cs
+          & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /t:winexe /o+ /platform:anycpu /nowarn:0618 /lib:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Xaml.dll /r:WindowsBase.dll /r:PresentationCore.dll /r:PresentationFramework.dll /out:CodexMonitor.exe src\*.cs
           Get-Item CodexMonitor.exe | Select-Object Name, Length
 
       - name: Upload Windows Artifact
