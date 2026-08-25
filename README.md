@@ -54,8 +54,8 @@
 - **Windows 用户**：下载 `CodexMonitor.exe` 直接双击运行。
 - **Linux 用户**：下载 `codex-monitor-linux-amd64.tar.gz` 解压后直接运行：
   ```bash
-  # 1. 启动顶部状态栏托盘 (零依赖)
-  ./codex-monitor-linux-amd64
+  # 1. 后台守护启动状态栏托盘 (关掉终端不退出)
+  ./codex-monitor-linux-amd64 -d
 
   # 2. 纯终端命令行模式
   ./codex-monitor-linux-amd64 --cli

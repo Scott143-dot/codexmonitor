@@ -530,15 +530,39 @@ func main() {
 			runCliDashboard(true)
 			return
 		}
+		if arg == "--daemon" || arg == "-d" {
+			// 后台自派生守护模式：脱离当前终端
+			cmd := os.Args[0]
+			var cmdArgs []string
+			for _, a := range args {
+				if a != "--daemon" && a != "-d" {
+					cmdArgs = append(cmdArgs, a)
+				}
+			}
+			attr := &os.ProcAttr{
+				Files: []*os.File{nil, nil, nil}, // 重定向标准输入输出，彻底断开终端挂载
+			}
+			p, err := os.StartProcess(cmd, append([]string{cmd}, cmdArgs...), attr)
+			if err == nil {
+				_ = p.Release()
+				fmt.Println("🚀 Codex Monitor 已在后台持久化运行 (关掉终端亦不退出)！")
+				return
+			}
+		}
 		if arg == "--help" || arg == "-h" {
 			fmt.Println("Codex Monitor for Linux (100% Pure Go Native Binary)")
 			fmt.Println("用法:")
-			fmt.Println("  ./codex-monitor          启动状态栏托盘 (零 Python 依赖)")
+			fmt.Println("  ./codex-monitor          启动状态栏托盘")
+			fmt.Println("  ./codex-monitor -d       后台守护启动 (关掉终端不退出)")
 			fmt.Println("  ./codex-monitor --cli    单次输出终端彩色仪表盘")
-			fmt.Println("  ./codex-monitor --watch  开启终端实时守护监控 (每60秒刷新)")
+			fmt.Println("  ./codex-monitor --watch  开启终端实时守护监控")
 			return
 		}
 	}
+
+	// 忽略 SIGHUP 终端挂断信号，防止关掉终端窗口时被杀死
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGHUP)
 
 	// 默认启动状态栏托盘
 	systray.Run(onReady, onExit)
