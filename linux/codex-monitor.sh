@@ -64,12 +64,19 @@ if [ -n "$DETECTED_PROXY" ]; then
     CURL_PROXY_ARG="-x $DETECTED_PROXY"
 fi
 
-HEADER_ACC=""
-if [ -n "$ACCOUNT_ID" ]; then
-    HEADER_ACC="-H \"chatgpt-account-id: $ACCOUNT_ID\""
+DEBUG_MODE=0
+for arg in "$@"; do
+    if [ "$arg" == "--debug" ] || [ "$arg" == "-v" ]; then
+        DEBUG_MODE=1
+    fi
+done
+
+if [ $DEBUG_MODE -eq 1 ]; then
+    echo "🔍 [DEBUG] 使用代理: ${CURL_PROXY_ARG:-无 (直连)}"
+    echo "🔍 [DEBUG] 正在测试请求 https://chatgpt.com/backend-api/wham/usage ..."
 fi
 
-RESP=$(curl -s --max-time 10 \
+RESP=$(curl -s -S --max-time 10 \
   $CURL_PROXY_ARG \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Origin: https://chatgpt.com" \
@@ -77,14 +84,18 @@ RESP=$(curl -s --max-time 10 \
   -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64)" \
   -H "Accept: application/json" \
   $HEADER_ACC \
-  "https://chatgpt.com/backend-api/wham/usage" 2>/dev/null)
+  "https://chatgpt.com/backend-api/wham/usage" 2>&1)
+
+if [ $DEBUG_MODE -eq 1 ]; then
+    echo "🔍 [DEBUG] 响应内容: $RESP"
+fi
 
 USED_PCT=$(echo "$RESP" | grep -o '"used_percent": *[0-9.]*' | head -n1 | grep -o '[0-9.]*' | cut -d'.' -f1)
 RESET_SEC=$(echo "$RESP" | grep -o '"reset_after_seconds": *[0-9]*' | head -n1 | grep -o '[0-9]*')
 
 REMAINING_PCT="--"
 RESET_CD="--"
-RESET_DT="正在连接网络 (请检查代理设置)"
+RESET_DT="正在连接网络 (执行 bash codex-monitor.sh --debug 查看详情)"
 
 if [ -n "$USED_PCT" ]; then
     REMAINING_PCT=$((100 - USED_PCT))
