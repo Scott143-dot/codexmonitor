@@ -19,15 +19,38 @@ fi
 
 # 2. 提取 token 与 account_id
 ACCESS_TOKEN=$(grep -o '"access_token": *"[^"]*"' "$AUTH_PATH" | head -n1 | cut -d'"' -f4)
+REFRESH_TOKEN=$(grep -o '"refresh_token": *"[^"]*"' "$AUTH_PATH" | head -n1 | cut -d'"' -f4)
 ACCOUNT_ID=$(grep -o '"account_id": *"[^"]*"' "$AUTH_PATH" | head -n1 | cut -d'"' -f4)
 ID_TOKEN=$(grep -o '"id_token": *"[^"]*"' "$AUTH_PATH" | head -n1 | cut -d'"' -f4)
 
-if [ -z "$ACCESS_TOKEN" ]; then
-    echo "❌ auth.json 中未找到 access_token"
-    exit 1
+# 3. 智能代理探测
+CURL_PROXY_ARG=""
+DETECTED_PROXY="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-${all_proxy:-${ALL_PROXY:-${proxy_https:-${proxy_http}}}}}}}}"
+
+if [ -n "$DETECTED_PROXY" ]; then
+    case "$DETECTED_PROXY" in
+        http://*|https://*|socks5://*) ;;
+        *) DETECTED_PROXY="http://$DETECTED_PROXY" ;;
+    esac
+    CURL_PROXY_ARG="-x $DETECTED_PROXY"
 fi
 
-# 3. 解析 JWT 提取邮箱与订阅信息
+# 自动刷新 Token 函数
+refresh_oauth_token() {
+    if [ -z "$REFRESH_TOKEN" ]; then return 1; fi
+    REF_BODY="{\"client_id\":\"app_EMoamEEZ73f0CkXaXp7hrann\",\"grant_type\":\"refresh_token\",\"refresh_token\":\"$REFRESH_TOKEN\"}"
+    REF_RESP=$(curl -s --max-time 10 $CURL_PROXY_ARG -H "Content-Type: application/json" -d "$REF_BODY" "https://auth.openai.com/oauth/token" 2>/dev/null)
+    NEW_TOK=$(echo "$REF_RESP" | grep -o '"access_token": *"[^"]*"' | head -n1 | cut -d'"' -f4)
+    if [ -n "$NEW_TOK" ]; then
+        ACCESS_TOKEN="$NEW_TOK"
+        # 覆写回 auth.json
+        sed -i "s/\"access_token\": *\"[^\"]*\"/\"access_token\": \"$NEW_TOK\"/g" "$AUTH_PATH" 2>/dev/null
+        return 0
+    fi
+    return 1
+}
+
+# 4. 解析 JWT 提取邮箱与订阅信息
 PARSE_TOK="${ID_TOKEN:-$ACCESS_TOKEN}"
 PAYLOAD_B64=$(echo "$PARSE_TOK" | cut -d'.' -f2 | tr '_-' '/+')
 REM=$((${#PAYLOAD_B64} % 4))
@@ -51,43 +74,30 @@ fi
 EXPIRY=$(echo "$JWT_JSON" | grep -o '"chatgpt_subscription_active_until": *"[^"]*"' | head -n1 | cut -d'"' -f4 | cut -dT -f1)
 [ -z "$EXPIRY" ] && EXPIRY="--"
 
-# 4. 智能自愈探测代理配置 (兼容 https_proxy, HTTP_PROXY, proxy_https 等各种拼写)
-CURL_PROXY_ARG=""
-DETECTED_PROXY="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-${all_proxy:-${ALL_PROXY:-${proxy_https:-${proxy_http}}}}}}}}"
-
-if [ -n "$DETECTED_PROXY" ]; then
-    # 自动补全 http:// 前缀
-    case "$DETECTED_PROXY" in
-        http://*|https://*|socks5://*) ;;
-        *) DETECTED_PROXY="http://$DETECTED_PROXY" ;;
-    esac
-    CURL_PROXY_ARG="-x $DETECTED_PROXY"
+HEADER_ACC=""
+if [ -n "$ACCOUNT_ID" ]; then
+    HEADER_ACC="-H \"chatgpt-account-id: $ACCOUNT_ID\""
 fi
 
-DEBUG_MODE=0
-for arg in "$@"; do
-    if [ "$arg" == "--debug" ] || [ "$arg" == "-v" ]; then
-        DEBUG_MODE=1
+do_fetch() {
+    curl -s --max-time 10 \
+      $CURL_PROXY_ARG \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Origin: https://chatgpt.com" \
+      -H "Referer: https://chatgpt.com/" \
+      -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64)" \
+      -H "Accept: application/json" \
+      $HEADER_ACC \
+      "https://chatgpt.com/backend-api/wham/usage" 2>/dev/null
+}
+
+RESP=$(do_fetch)
+
+# 如果 token 过期，自动刷新并重试！
+if echo "$RESP" | grep -q "token_expired" || echo "$RESP" | grep -q "401"; then
+    if refresh_oauth_token; then
+        RESP=$(do_fetch)
     fi
-done
-
-if [ $DEBUG_MODE -eq 1 ]; then
-    echo "🔍 [DEBUG] 使用代理: ${CURL_PROXY_ARG:-无 (直连)}"
-    echo "🔍 [DEBUG] 正在测试请求 https://chatgpt.com/backend-api/wham/usage ..."
-fi
-
-RESP=$(curl -s -S --max-time 10 \
-  $CURL_PROXY_ARG \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Origin: https://chatgpt.com" \
-  -H "Referer: https://chatgpt.com/" \
-  -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64)" \
-  -H "Accept: application/json" \
-  $HEADER_ACC \
-  "https://chatgpt.com/backend-api/wham/usage" 2>&1)
-
-if [ $DEBUG_MODE -eq 1 ]; then
-    echo "🔍 [DEBUG] 响应内容: $RESP"
 fi
 
 USED_PCT=$(echo "$RESP" | grep -o '"used_percent": *[0-9.]*' | head -n1 | grep -o '[0-9.]*' | cut -d'.' -f1)
@@ -97,14 +107,14 @@ REMAINING_PCT="--"
 RESET_CD="--"
 
 if echo "$RESP" | grep -q "token_expired"; then
-    RESET_DT="Token 已过期 (请重新登录更新 auth.json)"
+    RESET_DT="Token 续期失败 (请在宿主机登录刷新)"
 elif [ -n "$USED_PCT" ]; then
     REMAINING_PCT=$((100 - USED_PCT))
     [ $REMAINING_PCT -lt 0 ] && REMAINING_PCT=0
     [ $REMAINING_PCT -gt 100 ] && REMAINING_PCT=100
     RESET_DT="网络已同步"
 else
-    RESET_DT="正在连接网络 (执行 --debug 查看详情)"
+    RESET_DT="正在连接网络 (请检查代理设置)"
 fi
 
 if [ -n "$RESET_SEC" ]; then

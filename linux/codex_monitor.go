@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -16,14 +17,25 @@ import (
 )
 
 type TokenAuth struct {
-	Tokens struct {
-		AccessToken string `json:"access_token"`
-		IDToken     string `json:"id_token"`
-		AccountID   string `json:"account_id"`
+	AuthMode string `json:"auth_mode"`
+	Tokens   struct {
+		IDToken      string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		AccountID    string `json:"account_id"`
 	} `json:"tokens"`
-	AccessToken string `json:"access_token"`
-	IDToken     string `json:"id_token"`
-	AccountID   string `json:"account_id"`
+	IDToken      string `json:"id_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	AccountID    string `json:"account_id"`
+	LastRefresh  string `json:"last_refresh,omitempty"`
+}
+
+type RefreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
 }
 
 type UsageResponse struct {
@@ -59,6 +71,98 @@ func findAuthPath() string {
 	return ""
 }
 
+func getHTTPClient() *http.Client {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:           http.ProxyFromEnvironment,
+	}
+
+	proxyEnv := os.Getenv("https_proxy")
+	if proxyEnv == "" {
+		proxyEnv = os.Getenv("HTTPS_PROXY")
+	}
+	if proxyEnv == "" {
+		proxyEnv = os.Getenv("http_proxy")
+	}
+	if proxyEnv == "" {
+		proxyEnv = os.Getenv("all_proxy")
+	}
+	if proxyEnv != "" {
+		if !strings.HasPrefix(proxyEnv, "http://") && !strings.HasPrefix(proxyEnv, "https://") && !strings.HasPrefix(proxyEnv, "socks5://") {
+			proxyEnv = "http://" + proxyEnv
+		}
+		if pURL, err := url.Parse(proxyEnv); err == nil {
+			transport.Proxy = http.ProxyURL(pURL)
+		}
+	}
+
+	return &http.Client{
+		Timeout:   12 * time.Second,
+		Transport: transport,
+	}
+}
+
+// 自动 OAuth Refresh 续期并写回 auth.json
+func autoRefreshToken(client *http.Client, authPath string, rawAuth *TokenAuth) bool {
+	refreshToken := rawAuth.Tokens.RefreshToken
+	if refreshToken == "" {
+		refreshToken = rawAuth.RefreshToken
+	}
+	if refreshToken == "" {
+		return false
+	}
+
+	clientID := "app_EMoamEEZ73f0CkXaXp7hrann"
+	reqBody := map[string]string{
+		"client_id":     clientID,
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+	}
+	b, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", "https://auth.openai.com/oauth/token", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		return false
+	}
+	defer resp.Body.Close()
+
+	resBytes, _ := ioutil.ReadAll(resp.Body)
+	var refResp RefreshResponse
+	if err := json.Unmarshal(resBytes, &refResp); err != nil || refResp.AccessToken == "" {
+		return false
+	}
+
+	// 更新内存与本地文件
+	if rawAuth.Tokens.AccessToken != "" {
+		rawAuth.Tokens.AccessToken = refResp.AccessToken
+		if refResp.IDToken != "" {
+			rawAuth.Tokens.IDToken = refResp.IDToken
+		}
+		if refResp.RefreshToken != "" {
+			rawAuth.Tokens.RefreshToken = refResp.RefreshToken
+		}
+	} else {
+		rawAuth.AccessToken = refResp.AccessToken
+		if refResp.IDToken != "" {
+			rawAuth.IDToken = refResp.IDToken
+		}
+		if refResp.RefreshToken != "" {
+			rawAuth.RefreshToken = refResp.RefreshToken
+		}
+	}
+	rawAuth.LastRefresh = time.Now().UTC().Format(time.RFC3339Nano)
+
+	if updatedData, err := json.MarshalIndent(rawAuth, "", "  "); err == nil {
+		_ = ioutil.WriteFile(authPath, updatedData, 0644)
+	}
+
+	return true
+}
+
 func queryUsage() {
 	authPath := findAuthPath()
 	if authPath == "" {
@@ -66,14 +170,14 @@ func queryUsage() {
 		return
 	}
 
-	bytes, err := ioutil.ReadFile(authPath)
+	bytesData, err := ioutil.ReadFile(authPath)
 	if err != nil {
 		fmt.Printf("❌ 读取 auth.json 失败: %v\n", err)
 		return
 	}
 
 	var auth TokenAuth
-	_ = json.Unmarshal(bytes, &auth)
+	_ = json.Unmarshal(bytesData, &auth)
 
 	accessToken := auth.Tokens.AccessToken
 	if accessToken == "" {
@@ -88,9 +192,16 @@ func queryUsage() {
 		accountID = auth.AccountID
 	}
 
+	client := getHTTPClient()
+
 	if accessToken == "" {
-		fmt.Println("❌ auth.json 中未找到 access_token")
-		return
+		// 尝试用 refresh_token 恢复
+		if autoRefreshToken(client, authPath, &auth) {
+			accessToken = auth.Tokens.AccessToken
+			if accessToken == "" {
+				accessToken = auth.AccessToken
+			}
+		}
 	}
 
 	email := "ChatGPT 用户"
@@ -131,93 +242,76 @@ func queryUsage() {
 		}
 	}
 
-	// 智能代理自愈与 HTTP Transport 配置
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		Proxy:           http.ProxyFromEnvironment,
-	}
-
-	proxyEnv := os.Getenv("https_proxy")
-	if proxyEnv == "" {
-		proxyEnv = os.Getenv("HTTPS_PROXY")
-	}
-	if proxyEnv == "" {
-		proxyEnv = os.Getenv("http_proxy")
-	}
-	if proxyEnv == "" {
-		proxyEnv = os.Getenv("all_proxy")
-	}
-	if proxyEnv != "" {
-		if !strings.HasPrefix(proxyEnv, "http://") && !strings.HasPrefix(proxyEnv, "https://") && !strings.HasPrefix(proxyEnv, "socks5://") {
-			proxyEnv = "http://" + proxyEnv
-		}
-		if pURL, err := url.Parse(proxyEnv); err == nil {
-			transport.Proxy = http.ProxyURL(pURL)
-		}
-	}
-
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: transport,
-	}
-
-	req, _ := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Origin", "https://chatgpt.com")
-	req.Header.Set("Referer", "https://chatgpt.com/")
-	if accountID != "" {
-		req.Header.Set("chatgpt-account-id", accountID)
-	}
-
-	resp, err := client.Do(req)
-
 	remainingPctStr := "--"
 	resetCd := "--"
-	resetDt := "正在连接网络 (请检查代理设置)"
+	resetDt := "正在连接网络..."
 	pctVal := 0.0
 
-	if err == nil {
+	doRequest := func(tok string) (int, []byte) {
+		req, _ := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Origin", "https://chatgpt.com")
+		req.Header.Set("Referer", "https://chatgpt.com/")
+		if accountID != "" {
+			req.Header.Set("chatgpt-account-id", accountID)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, nil
+		}
 		defer resp.Body.Close()
-		body, _ := ioutil.ReadAll(resp.Body)
+		b, _ := ioutil.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+
+	status, body := doRequest(accessToken)
+
+	// 如果 401 或 token 过期，自动用 refresh_token 刷新并重试！
+	if status == 401 || (status == 200 && strings.Contains(string(body), "token_expired")) {
+		if autoRefreshToken(client, authPath, &auth) {
+			accessToken = auth.Tokens.AccessToken
+			if accessToken == "" {
+				accessToken = auth.AccessToken
+			}
+			status, body = doRequest(accessToken)
+		}
+	}
+
+	if status == 200 {
 		var uResp UsageResponse
-		if err := json.Unmarshal(body, &uResp); err == nil {
-			if uResp.Error.Code == "token_expired" {
-				resetDt = "Token 已过期 (请重新登录更新 auth.json)"
-			} else if resp.StatusCode == 200 {
-				if uResp.Email != "" {
-					email = uResp.Email
-				}
-				pctVal = 100.0 - uResp.RateLimit.PrimaryWindow.UsedPercent
-				if pctVal < 0 {
-					pctVal = 0
-				}
-				if pctVal > 100 {
-					pctVal = 100
-				}
-				remainingPctStr = fmt.Sprintf("%d", int(pctVal))
+		if err := json.Unmarshal(body, &uResp); err == nil && uResp.Error.Code == "" {
+			if uResp.Email != "" {
+				email = uResp.Email
+			}
+			pctVal = 100.0 - uResp.RateLimit.PrimaryWindow.UsedPercent
+			if pctVal < 0 {
+				pctVal = 0
+			}
+			if pctVal > 100 {
+				pctVal = 100
+			}
+			remainingPctStr = fmt.Sprintf("%d", int(pctVal))
 
-				sec := uResp.RateLimit.PrimaryWindow.ResetAfterSeconds
-				days := sec / 86400
-				hours := (sec % 86400) / 3600
-				mins := (sec % 3600) / 60
+			sec := uResp.RateLimit.PrimaryWindow.ResetAfterSeconds
+			days := sec / 86400
+			hours := (sec % 86400) / 3600
+			mins := (sec % 3600) / 60
 
-				if days > 0 {
-					resetCd = fmt.Sprintf("%dd", days)
-					resetDt = fmt.Sprintf("%d天 %d小时后", days, hours)
-				} else if hours > 0 {
-					resetCd = fmt.Sprintf("%dh", hours)
-					resetDt = fmt.Sprintf("%d小时 %d分钟后", hours, mins)
-				} else {
-					resetCd = fmt.Sprintf("%dm", mins)
-					resetDt = fmt.Sprintf("%d分钟后", mins)
-				}
+			if days > 0 {
+				resetCd = fmt.Sprintf("%dd", days)
+				resetDt = fmt.Sprintf("%d天 %d小时后", days, hours)
+			} else if hours > 0 {
+				resetCd = fmt.Sprintf("%dh", hours)
+				resetDt = fmt.Sprintf("%d小时 %d分钟后", hours, mins)
+			} else {
+				resetCd = fmt.Sprintf("%dm", mins)
+				resetDt = fmt.Sprintf("%d分钟后", mins)
 			}
 		}
 	}
 
-	// 渲染进度条 (兼顾 ANSI 终端与标准 ASCII)
 	totalBlocks := 20
 	filled := 0
 	if remainingPctStr != "--" {
