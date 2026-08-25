@@ -3,12 +3,29 @@
 # Codex Monitor (Linux / Ubuntu / Docker Shell Client)
 # ==========================================================
 
-# 1. 寻找本地 auth.json
+# 1. 寻找本地 auth.json (支持 cc-switch 软链接与多路径)
 AUTH_PATH=""
-for p in "$HOME/.codex/auth.json" "/root/.codex/auth.json" "${USERPROFILE}/.codex/auth.json"; do
-    if [ -f "$p" ]; then
-        AUTH_PATH="$p"
-        break
+CANDIDATES=(
+  "${CODEX_AUTH_PATH}"
+  "${CODEX_HOME}/auth.json"
+  "$HOME/.codex/auth.json"
+  "$HOME/.cc-switch/current/auth.json"
+  "$HOME/.cc-switch/auth.json"
+  "$HOME/.config/cc-switch/auth.json"
+  "/root/.codex/auth.json"
+  "/root/.cc-switch/current/auth.json"
+  "/root/.cc-switch/auth.json"
+  "/root/.config/cc-switch/auth.json"
+)
+
+for p in "${CANDIDATES[@]}"; do
+    if [ -n "$p" ] && [ -f "$p" ]; then
+        # 解析真实物理文件路径 (如果是软链接)
+        REAL_P=$(readlink -f "$p" 2>/dev/null || echo "$p")
+        if [ -f "$REAL_P" ]; then
+            AUTH_PATH="$REAL_P"
+            break
+        fi
     fi
 done
 

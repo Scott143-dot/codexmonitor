@@ -56,14 +56,28 @@ type UsageResponse struct {
 func findAuthPath() string {
 	home, _ := os.UserHomeDir()
 	candidates := []string{
+		os.Getenv("CODEX_AUTH_PATH"),
+		filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"),
 		filepath.Join(home, ".codex", "auth.json"),
+		filepath.Join(home, ".cc-switch", "current", "auth.json"),
+		filepath.Join(home, ".cc-switch", "auth.json"),
+		filepath.Join(home, ".config", "cc-switch", "auth.json"),
+		"/root/.codex/auth.json",
+		"/root/.cc-switch/current/auth.json",
+		"/root/.cc-switch/auth.json",
+		"/root/.config/cc-switch/auth.json",
 		filepath.Join(os.Getenv("HOME"), ".codex", "auth.json"),
 		filepath.Join(os.Getenv("USERPROFILE"), ".codex", "auth.json"),
-		"/root/.codex/auth.json",
 	}
 	for _, c := range candidates {
 		if c != "" {
-			if _, err := os.Stat(c); err == nil {
+			// 解析可能的软链接
+			realPath, err := filepath.EvalSymlinks(c)
+			if err == nil {
+				if _, err := os.Stat(realPath); err == nil {
+					return realPath
+				}
+			} else if _, err := os.Stat(c); err == nil {
 				return c
 			}
 		}
