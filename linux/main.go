@@ -2,82 +2,80 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
-	"flag"
 	"fmt"
-	"io/ioutil"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
+	"io"
 	"net/http"
-	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
+
+	"github.com/getlantern/systray"
 )
 
-type TokenAuth struct {
-	AuthMode string `json:"auth_mode"`
-	Tokens   struct {
-		IDToken      string `json:"id_token"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		AccountID    string `json:"account_id"`
-	} `json:"tokens"`
-	IDToken      string `json:"id_token"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	AccountID    string `json:"account_id"`
-	LastRefresh  string `json:"last_refresh,omitempty"`
+type AuthInfo struct {
+	AccessToken        string `json:"access_token"`
+	RefreshToken       string `json:"refresh_token"`
+	AccountID          string `json:"account_id"`
+	Email              string
+	PlanType           string
+	SubscriptionExpiry string
+	AuthPath           string
 }
 
-type RefreshResponse struct {
-	AccessToken  string `json:"access_token"`
-	IDToken      string `json:"id_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
+type UsageData struct {
+	Percentage         float64
+	PercentageStr      string
+	ResetCountdown     string
+	ResetDetail        string
+	Email              string
+	PlanType           string
+	SubscriptionExpiry string
 }
 
-type UsageResponse struct {
-	Email     string `json:"email"`
-	PlanType  string `json:"plan_type"`
-	RateLimit struct {
-		PrimaryWindow struct {
-			UsedPercent       float64 `json:"used_percent"`
-			ResetAfterSeconds int     `json:"reset_after_seconds"`
-		} `json:"primary_window"`
-	} `json:"rate_limit"`
-	Error struct {
-		Message string `json:"message"`
-		Code    string `json:"code"`
-	} `json:"error"`
-}
+var (
+	currentData  UsageData
+	dataMutex    sync.RWMutex
+	mStatus      *systray.MenuItem
+	mEmail       *systray.MenuItem
+	mPlan        *systray.MenuItem
+	mExpiry      *systray.MenuItem
+	mReset       *systray.MenuItem
+	mRefresh     *systray.MenuItem
+	mQuit        *systray.MenuItem
+)
 
-func findAuthPath() string {
-	home, _ := os.UserHomeDir()
+func findAuthJson() string {
 	candidates := []string{
 		os.Getenv("CODEX_AUTH_PATH"),
 		filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"),
-		filepath.Join(home, ".codex", "auth.json"),
-		filepath.Join(home, ".cc-switch", "current", "auth.json"),
-		filepath.Join(home, ".cc-switch", "auth.json"),
-		filepath.Join(home, ".config", "cc-switch", "auth.json"),
+		filepath.Join(os.Getenv("HOME"), ".codex", "auth.json"),
+		filepath.Join(os.Getenv("HOME"), ".cc-switch", "current", "auth.json"),
+		filepath.Join(os.Getenv("HOME"), ".cc-switch", "auth.json"),
+		filepath.Join(os.Getenv("HOME"), ".config", "cc-switch", "auth.json"),
+		"/config/.codex/auth.json",
 		"/root/.codex/auth.json",
 		"/root/.cc-switch/current/auth.json",
 		"/root/.cc-switch/auth.json",
 		"/root/.config/cc-switch/auth.json",
-		filepath.Join(os.Getenv("HOME"), ".codex", "auth.json"),
 		filepath.Join(os.Getenv("USERPROFILE"), ".codex", "auth.json"),
 	}
+
 	for _, c := range candidates {
 		if c != "" {
-			// 解析可能的软链接
-			realPath, err := filepath.EvalSymlinks(c)
-			if err == nil {
-				if _, err := os.Stat(realPath); err == nil {
-					return realPath
+			if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+				if realP, err := filepath.EvalSymlinks(c); err == nil {
+					return realP
 				}
-			} else if _, err := os.Stat(c); err == nil {
 				return c
 			}
 		}
@@ -85,283 +83,398 @@ func findAuthPath() string {
 	return ""
 }
 
-func getHTTPClient() *http.Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		Proxy:           http.ProxyFromEnvironment,
+func fetchLocalAuth() AuthInfo {
+	info := AuthInfo{
+		Email:              "未登录",
+		PlanType:           "--",
+		SubscriptionExpiry: "--",
 	}
 
-	proxyEnv := os.Getenv("https_proxy")
-	if proxyEnv == "" {
-		proxyEnv = os.Getenv("HTTPS_PROXY")
+	p := findAuthJson()
+	if p == "" {
+		return info
 	}
-	if proxyEnv == "" {
-		proxyEnv = os.Getenv("http_proxy")
+	info.AuthPath = p
+
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return info
 	}
-	if proxyEnv == "" {
-		proxyEnv = os.Getenv("all_proxy")
+
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return info
 	}
-	if proxyEnv != "" {
-		if !strings.HasPrefix(proxyEnv, "http://") && !strings.HasPrefix(proxyEnv, "https://") && !strings.HasPrefix(proxyEnv, "socks5://") {
-			proxyEnv = "http://" + proxyEnv
-		}
-		if pURL, err := url.Parse(proxyEnv); err == nil {
-			transport.Proxy = http.ProxyURL(pURL)
+
+	tokens, ok := root["tokens"].(map[string]interface{})
+	if !ok {
+		tokens = root
+	}
+
+	if acc, ok := tokens["access_token"].(string); ok {
+		info.AccessToken = acc
+	}
+	if ref, ok := tokens["refresh_token"].(string); ok {
+		info.RefreshToken = ref
+	}
+	if accId, ok := tokens["account_id"].(string); ok {
+		info.AccountID = accId
+	}
+
+	idTok, _ := tokens["id_token"].(string)
+	tok := idTok
+	if tok == "" {
+		tok = info.AccessToken
+	}
+
+	if strings.Contains(tok, ".") {
+		parts := strings.Split(tok, ".")
+		if len(parts) >= 2 {
+			payloadSeg := parts[1]
+			if rem := len(payloadSeg) % 4; rem != 0 {
+				payloadSeg += strings.Repeat("=", 4-rem)
+			}
+			if decoded, err := base64.URLEncoding.DecodeString(payloadSeg); err == nil {
+				var pMap map[string]interface{}
+				if err := json.Unmarshal(decoded, &pMap); err == nil {
+					if email, ok := pMap["email"].(string); ok && email != "" {
+						info.Email = email
+					} else if prof, ok := pMap["https://api.openai.com/profile"].(map[string]interface{}); ok {
+						if em, ok := prof["email"].(string); ok {
+							info.Email = em
+						}
+					}
+
+					if authObj, ok := pMap["https://api.openai.com/auth"].(map[string]interface{}); ok {
+						if pt, ok := authObj["chatgpt_plan_type"].(string); ok {
+							ptLow := strings.ToLower(pt)
+							if strings.Contains(ptLow, "pro") {
+								info.PlanType = "ChatGPT Pro"
+							} else if strings.Contains(ptLow, "plus") {
+								info.PlanType = "ChatGPT Plus"
+							} else if strings.Contains(ptLow, "team") {
+								info.PlanType = "ChatGPT Team"
+							} else {
+								info.PlanType = "ChatGPT " + strings.Title(ptLow)
+							}
+						}
+						if rawUntil, ok := authObj["chatgpt_subscription_active_until"].(string); ok && rawUntil != "" {
+							if len(rawUntil) >= 16 {
+								info.SubscriptionExpiry = strings.Replace(rawUntil[:16], "T", " ", 1)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
-	return &http.Client{
-		Timeout:   12 * time.Second,
-		Transport: transport,
+	if info.Email == "" || info.Email == "未登录" {
+		info.Email = "ChatGPT 用户"
 	}
+	return info
 }
 
-// 自动 OAuth Refresh 续期并写回 auth.json
-func autoRefreshToken(client *http.Client, authPath string, rawAuth *TokenAuth) bool {
-	refreshToken := rawAuth.Tokens.RefreshToken
-	if refreshToken == "" {
-		refreshToken = rawAuth.RefreshToken
-	}
-	if refreshToken == "" {
-		return false
+func autoRefreshToken(info *AuthInfo) string {
+	if info.RefreshToken == "" {
+		return ""
 	}
 
-	clientID := "app_EMoamEEZ73f0CkXaXp7hrann"
-	reqBody := map[string]string{
-		"client_id":     clientID,
+	reqBody, _ := json.Marshal(map[string]string{
+		"client_id":     "app_EMoamEEZ73f0CkXaXp7hrann",
 		"grant_type":    "refresh_token",
-		"refresh_token": refreshToken,
-	}
-	b, _ := json.Marshal(reqBody)
+		"refresh_token": info.RefreshToken,
+	})
 
-	req, _ := http.NewRequest("POST", "https://auth.openai.com/oauth/token", bytes.NewReader(b))
+	req, err := http.NewRequest("POST", "https://auth.openai.com/oauth/token", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return ""
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
 
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil || resp.StatusCode != 200 {
-		return false
+		return ""
 	}
 	defer resp.Body.Close()
 
-	resBytes, _ := ioutil.ReadAll(resp.Body)
-	var refResp RefreshResponse
-	if err := json.Unmarshal(resBytes, &refResp); err != nil || refResp.AccessToken == "" {
-		return false
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return ""
 	}
 
-	// 更新内存与本地文件
-	if rawAuth.Tokens.AccessToken != "" {
-		rawAuth.Tokens.AccessToken = refResp.AccessToken
-		if refResp.IDToken != "" {
-			rawAuth.Tokens.IDToken = refResp.IDToken
-		}
-		if refResp.RefreshToken != "" {
-			rawAuth.Tokens.RefreshToken = refResp.RefreshToken
-		}
-	} else {
-		rawAuth.AccessToken = refResp.AccessToken
-		if refResp.IDToken != "" {
-			rawAuth.IDToken = refResp.IDToken
-		}
-		if refResp.RefreshToken != "" {
-			rawAuth.RefreshToken = refResp.RefreshToken
-		}
-	}
-	rawAuth.LastRefresh = time.Now().UTC().Format(time.RFC3339Nano)
+	newAcc, _ := res["access_token"].(string)
+	newRef, _ := res["refresh_token"].(string)
 
-	if updatedData, err := json.MarshalIndent(rawAuth, "", "  "); err == nil {
-		_ = ioutil.WriteFile(authPath, updatedData, 0644)
+	if newAcc != "" && info.AuthPath != "" {
+		if raw, err := os.ReadFile(info.AuthPath); err == nil {
+			var fileData map[string]interface{}
+			if err := json.Unmarshal(raw, &fileData); err == nil {
+				if tokens, ok := fileData["tokens"].(map[string]interface{}); ok {
+					tokens["access_token"] = newAcc
+					if newRef != "" {
+						tokens["refresh_token"] = newRef
+					}
+				} else {
+					fileData["access_token"] = newAcc
+					if newRef != "" {
+						fileData["refresh_token"] = newRef
+					}
+				}
+				if updated, err := json.MarshalIndent(fileData, "", "  "); err == nil {
+					_ = os.WriteFile(info.AuthPath, updated, 0644)
+				}
+			}
+		}
+		info.AccessToken = newAcc
+		return newAcc
 	}
-
-	return true
+	return ""
 }
 
-func queryUsage() {
-	authPath := findAuthPath()
-	if authPath == "" {
-		fmt.Println("❌ 未检测到 ~/.codex/auth.json 凭据文件")
-		return
+func fetchUsageData() UsageData {
+	auth := fetchLocalAuth()
+	data := UsageData{
+		Percentage:         100.0,
+		PercentageStr:      "--",
+		ResetCountdown:     "--",
+		ResetDetail:        "正在同步用量...",
+		Email:              auth.Email,
+		PlanType:           auth.PlanType,
+		SubscriptionExpiry: auth.SubscriptionExpiry,
 	}
 
-	bytesData, err := ioutil.ReadFile(authPath)
-	if err != nil {
-		fmt.Printf("❌ 读取 auth.json 失败: %v\n", err)
-		return
-	}
-
-	var auth TokenAuth
-	_ = json.Unmarshal(bytesData, &auth)
-
-	accessToken := auth.Tokens.AccessToken
-	if accessToken == "" {
-		accessToken = auth.AccessToken
-	}
-	idToken := auth.Tokens.IDToken
-	if idToken == "" {
-		idToken = auth.IDToken
-	}
-	accountID := auth.Tokens.AccountID
-	if accountID == "" {
-		accountID = auth.AccountID
-	}
-
-	client := getHTTPClient()
-
-	if accessToken == "" {
-		// 尝试用 refresh_token 恢复
-		if autoRefreshToken(client, authPath, &auth) {
-			accessToken = auth.Tokens.AccessToken
-			if accessToken == "" {
-				accessToken = auth.AccessToken
-			}
+	if auth.AccessToken == "" {
+		if newTok := autoRefreshToken(&auth); newTok != "" {
+			auth.AccessToken = newTok
+		} else {
+			data.PercentageStr = "--"
+			data.ResetDetail = "未检测到本地凭据"
+			return data
 		}
 	}
 
-	email := "ChatGPT 用户"
-	planType := "ChatGPT Plus"
-	expiry := "--"
-
-	parseTok := idToken
-	if parseTok == "" {
-		parseTok = accessToken
-	}
-	parts := strings.Split(parseTok, ".")
-	if len(parts) >= 2 {
-		b64 := parts[1]
-		if rem := len(b64) % 4; rem > 0 {
-			b64 += strings.Repeat("=", 4-rem)
-		}
-		if rawPayload, err := base64.URLEncoding.DecodeString(b64); err == nil {
-			var pMap map[string]interface{}
-			if err := json.Unmarshal(rawPayload, &pMap); err == nil {
-				if e, ok := pMap["email"].(string); ok && e != "" {
-					email = e
-				}
-				if authObj, ok := pMap["https://api.openai.com/auth"].(map[string]interface{}); ok {
-					if pt, ok := authObj["chatgpt_plan_type"].(string); ok && pt != "" {
-						if strings.Contains(strings.ToLower(pt), "pro") {
-							planType = "ChatGPT Pro"
-						} else if strings.Contains(strings.ToLower(pt), "team") {
-							planType = "ChatGPT Team"
-						} else {
-							planType = "ChatGPT Plus"
-						}
-					}
-					if until, ok := authObj["chatgpt_subscription_active_until"].(string); ok && len(until) >= 10 {
-						expiry = until[:10]
-					}
-				}
-			}
-		}
-	}
-
-	remainingPctStr := "--"
-	resetCd := "--"
-	resetDt := "正在连接网络..."
-	pctVal := 0.0
-
-	doRequest := func(tok string) (int, []byte) {
+	makeReq := func(token string) (*http.Response, error) {
 		req, _ := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
-		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Origin", "https://chatgpt.com")
 		req.Header.Set("Referer", "https://chatgpt.com/")
-		if accountID != "" {
-			req.Header.Set("chatgpt-account-id", accountID)
+		if auth.AccountID != "" {
+			req.Header.Set("chatgpt-account-id", auth.AccountID)
 		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return 0, nil
-		}
-		defer resp.Body.Close()
-		b, _ := ioutil.ReadAll(resp.Body)
-		return resp.StatusCode, b
+		client := &http.Client{Timeout: 9 * time.Second}
+		return client.Do(req)
 	}
 
-	status, body := doRequest(accessToken)
-
-	// 如果 401 或 token 过期，自动用 refresh_token 刷新并重试！
-	if status == 401 || (status == 200 && strings.Contains(string(body), "token_expired")) {
-		if autoRefreshToken(client, authPath, &auth) {
-			accessToken = auth.Tokens.AccessToken
-			if accessToken == "" {
-				accessToken = auth.AccessToken
-			}
-			status, body = doRequest(accessToken)
+	resp, err := makeReq(auth.AccessToken)
+	if err != nil || (resp != nil && resp.StatusCode == 401) {
+		if newTok := autoRefreshToken(&auth); newTok != "" {
+			resp, err = makeReq(newTok)
 		}
 	}
 
-	if status == 200 {
-		var uResp UsageResponse
-		if err := json.Unmarshal(body, &uResp); err == nil && uResp.Error.Code == "" {
-			if uResp.Email != "" {
-				email = uResp.Email
-			}
-			pctVal = 100.0 - uResp.RateLimit.PrimaryWindow.UsedPercent
-			if pctVal < 0 {
-				pctVal = 0
-			}
-			if pctVal > 100 {
-				pctVal = 100
-			}
-			remainingPctStr = fmt.Sprintf("%d", int(pctVal))
+	if err != nil || resp == nil || resp.StatusCode != 200 {
+		data.ResetDetail = "正在连接网络..."
+		return data
+	}
+	defer resp.Body.Close()
 
-			sec := uResp.RateLimit.PrimaryWindow.ResetAfterSeconds
-			days := sec / 86400
-			hours := (sec % 86400) / 3600
-			mins := (sec % 3600) / 60
+	body, _ := io.ReadAll(resp.Body)
+	var res map[string]interface{}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return data
+	}
 
-			if days > 0 {
-				resetCd = fmt.Sprintf("%dd", days)
-				resetDt = fmt.Sprintf("%d天 %d小时后", days, hours)
-			} else if hours > 0 {
-				resetCd = fmt.Sprintf("%dh", hours)
-				resetDt = fmt.Sprintf("%d小时 %d分钟后", hours, mins)
-			} else {
-				resetCd = fmt.Sprintf("%dm", mins)
-				resetDt = fmt.Sprintf("%d分钟后", mins)
+	rateLimit, _ := res["rate_limit"].(map[string]interface{})
+	primary, _ := rateLimit["primary_window"].(map[string]interface{})
+	usedPct, _ := primary["used_percent"].(float64)
+
+	pctVal := 100.0 - usedPct
+	if pctVal < 0 {
+		pctVal = 0
+	}
+	if pctVal > 100 {
+		pctVal = 100
+	}
+
+	data.Percentage = pctVal
+	data.PercentageStr = fmt.Sprintf("%d%%", int(pctVal))
+
+	secFloat, _ := primary["reset_after_seconds"].(float64)
+	sec := int(secFloat)
+	days := sec / 86400
+	hours := (sec % 86400) / 3600
+	mins := (sec % 3600) / 60
+
+	if days > 0 {
+		data.ResetCountdown = fmt.Sprintf("%dd", days)
+		data.ResetDetail = fmt.Sprintf("%d天 %d小时后", days, hours)
+	} else if hours > 0 {
+		data.ResetCountdown = fmt.Sprintf("%dh", hours)
+		data.ResetDetail = fmt.Sprintf("%d小时 %d分钟后", hours, mins)
+	} else {
+		data.ResetCountdown = fmt.Sprintf("%dm", mins)
+		data.ResetDetail = fmt.Sprintf("%d分钟后", mins)
+	}
+
+	return data
+}
+
+func generateTrayIcon(pct float64) []byte {
+	const size = 64
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+
+	// 绘制深色发光底
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.Transparent}, image.Point{}, draw.Src)
+	for y := 4; y < size-4; y++ {
+		for x := 4; x < size-4; x++ {
+			dx := float64(x - size/2)
+			dy := float64(y - size/2)
+			r := dx*dx + dy*dy
+			if r <= 28*28 && r >= 20*20 {
+				img.Set(x, y, color.RGBA{18, 20, 28, 255})
 			}
 		}
 	}
 
-	totalBlocks := 20
-	filled := 0
-	if remainingPctStr != "--" {
-		filled = int((pctVal / 100.0) * float64(totalBlocks))
+	// 绘制进度弧圈
+	arcLimit := int((pct / 100.0) * float64(size-16))
+	for x := 8; x < 8+arcLimit; x++ {
+		img.Set(x, size-8, color.RGBA{56, 189, 248, 255})
+		img.Set(x, size-7, color.RGBA{56, 189, 248, 255})
+		img.Set(x, size-6, color.RGBA{56, 189, 248, 255})
 	}
-	empty := totalBlocks - filled
 
-	barFill := strings.Repeat("#", filled)
-	barEmpty := strings.Repeat("-", empty)
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
 
-	fmt.Println("==================================================")
-	fmt.Println("  ⚡ Codex Monitor (Linux Standalone ELF Binary)")
-	fmt.Println("==================================================")
-	fmt.Printf("  邮箱: %s\n", email)
-	fmt.Printf("  计划: %s\n", planType)
-	fmt.Printf("  到期: %s\n", expiry)
-	fmt.Printf("  重置: %s\n", resetDt)
-	fmt.Println("--------------------------------------------------")
-	fmt.Printf("  额度: %3s%% [%s%s] (%s)\n", remainingPctStr, barFill, barEmpty, resetCd)
-	fmt.Println("==================================================")
+func onReady() {
+	systray.SetTitle("⚡ --")
+	systray.SetTooltip("Codex Monitor (Linux Native Standalone)")
+
+	mStatus = systray.AddMenuItem("⚡ 剩余额度: --", "")
+	mStatus.Disable()
+	systray.AddSeparator()
+
+	mEmail = systray.AddMenuItem("📧 账号: --", "")
+	mEmail.Disable()
+
+	mPlan = systray.AddMenuItem("💎 类型: --", "")
+	mPlan.Disable()
+
+	mExpiry = systray.AddMenuItem("📅 到期: --", "")
+	mExpiry.Disable()
+
+	mReset = systray.AddMenuItem("⏱️ 重置: --", "")
+	mReset.Disable()
+
+	systray.AddSeparator()
+	mRefresh = systray.AddMenuItem("🔄 立即刷新", "立即拉取最新用量")
+	mQuit = systray.AddMenuItem("❌ 退出", "退出 Codex Monitor")
+
+	updateData := func() {
+		d := fetchUsageData()
+		dataMutex.Lock()
+		currentData = d
+		dataMutex.Unlock()
+
+		systray.SetTitle(fmt.Sprintf("⚡ %s (%s)", d.PercentageStr, d.ResetCountdown))
+		systray.SetTooltip(fmt.Sprintf("Codex: %s (重置: %s)", d.PercentageStr, d.ResetCountdown))
+		systray.SetIcon(generateTrayIcon(d.Percentage))
+
+		mStatus.SetTitle(fmt.Sprintf("⚡ 剩余额度: %s (倒计时: %s)", d.PercentageStr, d.ResetCountdown))
+		mEmail.SetTitle(fmt.Sprintf("📧 账号: %s", d.Email))
+		mPlan.SetTitle(fmt.Sprintf("💎 类型: %s", d.PlanType))
+		mExpiry.SetTitle(fmt.Sprintf("📅 到期: %s", d.SubscriptionExpiry))
+		mReset.SetTitle(fmt.Sprintf("⏱️ 重置: %s", d.ResetDetail))
+	}
+
+	go func() {
+		updateData()
+		ticker := time.NewTicker(60 * time.Second)
+		for {
+			select {
+			case <-ticker.C:
+				updateData()
+			case <-mRefresh.ClickedCh:
+				go updateData()
+			case <-mQuit.ClickedCh:
+				systray.Quit()
+				os.Exit(0)
+			}
+		}
+	}()
+}
+
+func onExit() {
+	// 清理
+}
+
+func runCliDashboard(watch bool) {
+	printData := func() {
+		d := fetchUsageData()
+		fmt.Print("\033[2J\033[H") // 清屏
+		fmt.Println("==================================================")
+		fmt.Println("  ⚡ Codex Monitor (Linux Standalone ELF Binary)")
+		fmt.Println("==================================================")
+		fmt.Printf("  📧 账号: %s\n", d.Email)
+		fmt.Printf("  💎 计划: %s\n", d.PlanType)
+		fmt.Printf("  📅 到期: %s\n", d.SubscriptionExpiry)
+		fmt.Printf("  ⏱️ 重置: %s\n", d.ResetDetail)
+		fmt.Println("--------------------------------------------------")
+		barLen := 20
+		filled := int((d.Percentage / 100.0) * float64(barLen))
+		bar := strings.Repeat("#", filled) + strings.Repeat("-", barLen-filled)
+		fmt.Printf("  ⚡ 额度: %4s [%s] (%s)\n", d.PercentageStr, bar, d.ResetCountdown)
+		fmt.Println("==================================================")
+		if watch {
+			fmt.Printf("  🕒 刷新时间: %s (按 Ctrl+C 退出)\n", time.Now().Format("15:04:05"))
+		}
+	}
+
+	printData()
+	if watch {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		ticker := time.NewTicker(60 * time.Second)
+		for {
+			select {
+			case <-ticker.C:
+				printData()
+			case <-c:
+				return
+			}
+		}
+	}
 }
 
 func main() {
-	watchFlag := flag.Bool("watch", false, "实时守护监控模式 (每 60 秒自动刷新)")
-	flag.BoolVar(watchFlag, "w", false, "实时守护监控模式 (缩写)")
-	flag.Parse()
-
-	if *watchFlag {
-		fmt.Print("\033[2J\033[H")
-		for {
-			fmt.Print("\033[H")
-			queryUsage()
-			fmt.Println("\n(实时监控中... 每 60 秒刷新一次，按 Ctrl+C 退出)")
-			time.Sleep(60 * time.Second)
+	args := os.Args[1:]
+	for _, arg := range args {
+		if arg == "--cli" || arg == "-c" {
+			runCliDashboard(false)
+			return
 		}
-	} else {
-		queryUsage()
+		if arg == "--watch" || arg == "-w" {
+			runCliDashboard(true)
+			return
+		}
+		if arg == "--help" || arg == "-h" {
+			fmt.Println("Codex Monitor for Linux (100% Pure Go Native Binary)")
+			fmt.Println("用法:")
+			fmt.Println("  ./codex-monitor          启动状态栏托盘 (零 Python 依赖)")
+			fmt.Println("  ./codex-monitor --cli    单次输出终端彩色仪表盘")
+			fmt.Println("  ./codex-monitor --watch  开启终端实时守护监控 (每60秒刷新)")
+			return
+		}
 	}
+
+	// 默认启动状态栏托盘
+	systray.Run(onReady, onExit)
 }
