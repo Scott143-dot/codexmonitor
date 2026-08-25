@@ -1,0 +1,15 @@
+# Build output and temporary files
+*.obj
+*.pdb
+*.tmp
+*.log
+
+# IDE & Editor files
+.vscode/
+.vs/
+.idea/
+*.suo
+*.user
+
+# Local runtime configuration (personal preferences)
+arcane_config.json
