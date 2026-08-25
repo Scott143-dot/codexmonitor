@@ -35,18 +35,19 @@
 - **右键菜单**：切换配色主题、尾迹特效、开关开机自启。
 
 #### 🐧 Linux 桌面端 (Ubuntu / Debian / Fedora)
-在终端运行一键启动脚本（自动安装应用图标并拉起桌面悬浮球）：
+直接运行打包好的桌面 GUI 悬浮球执行程序（直接双击或终端运行，即刻弹出悬浮球）：
+```bash
+chmod +x linux/codex-monitor-gui
+./linux/codex-monitor-gui
+```
+或执行桌面集成安装（将应用图标添加至系统应用抽屉并开机自启）：
 ```bash
 bash linux/install_and_run_ubuntu.sh
 ```
-或直接运行 Python 桌面悬浮球：
-```bash
-python3 linux/codex_monitor_gui.py
-```
 
-#### 🖥️ Linux 服务器 / Docker 容器端
+#### 🖥️ Linux 服务器 / Docker 终端端
 ```bash
-# 运行打包好的独立可执行程序
+# 运行纯独立 ELF 终端执行程序
 chmod +x linux/codex-monitor
 ./linux/codex-monitor
 

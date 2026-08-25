@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Codex Monitor for Linux Desktop (GUI Floating Widget)
-Linux 桌面原生悬浮球 (基于 Python 标准库 Tkinter，零外部依赖，即开即用)
+Codex Monitor GUI (Linux Native Standalone Executable)
+Linux 桌面原生单文件独立可执行悬浮球程序
+直接运行 (./codex-monitor-gui) 或双击即可瞬开桌面悬浮球
 """
 
 import os
@@ -13,39 +14,60 @@ import base64
 import threading
 import urllib.request
 import urllib.error
-import tkinter as tk
-from tkinter import Menu
+
+try:
+    import tkinter as tk
+    from tkinter import Menu
+except ImportError:
+    print("❌ 未检测到 Tkinter 图形库，正在尝试使用终端模式运行...")
+    os.system("bash " + os.path.join(os.path.dirname(__file__), "codex-monitor.sh"))
+    sys.exit(0)
 
 def find_auth_json():
     candidates = [
+        os.getenv("CODEX_AUTH_PATH"),
+        os.path.join(os.getenv("CODEX_HOME", ""), "auth.json"),
         os.path.expanduser("~/.codex/auth.json"),
-        os.path.join(os.environ.get("HOME", ""), ".codex", "auth.json"),
-        os.path.join(os.environ.get("USERPROFILE", ""), ".codex", "auth.json"),
+        os.path.expanduser("~/.cc-switch/current/auth.json"),
+        os.path.expanduser("~/.cc-switch/auth.json"),
+        os.path.expanduser("~/.config/cc-switch/auth.json"),
         "/root/.codex/auth.json",
+        "/root/.cc-switch/current/auth.json",
+        "/root/.cc-switch/auth.json",
+        "/root/.config/cc-switch/auth.json",
     ]
     for c in candidates:
-        if os.path.isfile(c):
-            return c
+        if c and os.path.isfile(c):
+            try:
+                real_p = os.path.realpath(c)
+                if os.path.isfile(real_p):
+                    return real_p
+            except Exception:
+                return c
     return None
 
 def fetch_local_auth():
     auth_info = {
         "access_token": "",
+        "refresh_token": "",
         "account_id": "",
         "email": "未登录",
         "plan_type": "--",
-        "subscription_expiry": "--"
+        "subscription_expiry": "--",
+        "auth_path": ""
     }
     p = find_auth_json()
     if not p:
         return auth_info
 
+    auth_info["auth_path"] = p
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         tokens = data.get("tokens", {}) if isinstance(data.get("tokens"), dict) else data
         access_token = tokens.get("access_token", "")
+        refresh_token = tokens.get("refresh_token", "")
         id_token = tokens.get("id_token", "")
         account_id = tokens.get("account_id", "")
 
@@ -76,6 +98,7 @@ def fetch_local_auth():
                         sub_until = raw_until[:16].replace("T", " ")
 
         auth_info["access_token"] = access_token
+        auth_info["refresh_token"] = refresh_token
         auth_info["account_id"] = account_id
         auth_info["email"] = email if email else "ChatGPT 用户"
         auth_info["plan_type"] = plan_type
@@ -84,6 +107,56 @@ def fetch_local_auth():
         pass
 
     return auth_info
+
+def auto_refresh_token(auth_info):
+    ref_tok = auth_info.get("refresh_token")
+    if not ref_tok:
+        return None
+
+    proxy_url = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or \
+                os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or \
+                os.environ.get("all_proxy") or os.environ.get("ALL_PROXY")
+    opener = urllib.request.build_opener()
+    if proxy_url:
+        if not proxy_url.startswith("http"):
+            proxy_url = "http://" + proxy_url
+        opener.add_handler(urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+
+    body = json.dumps({
+        "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+        "grant_type": "refresh_token",
+        "refresh_token": ref_tok
+    }).encode("utf-8")
+
+    req = urllib.request.Request("https://auth.openai.com/oauth/token", data=body)
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+
+    try:
+        with opener.open(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            new_acc = data.get("access_token")
+            new_ref = data.get("refresh_token")
+            if new_acc and auth_info.get("auth_path"):
+                # 写回 auth.json
+                p = auth_info["auth_path"]
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        file_data = json.load(f)
+                    if "tokens" in file_data and isinstance(file_data["tokens"], dict):
+                        file_data["tokens"]["access_token"] = new_acc
+                        if new_ref: file_data["tokens"]["refresh_token"] = new_ref
+                    else:
+                        file_data["access_token"] = new_acc
+                        if new_ref: file_data["refresh_token"] = new_ref
+                    with open(p, "w", encoding="utf-8") as f:
+                        json.dump(file_data, f, indent=2)
+                except Exception:
+                    pass
+                return new_acc
+    except Exception:
+        pass
+    return None
 
 class ToolTip:
     def __init__(self, widget):
@@ -118,13 +191,12 @@ class CodexFloatingBall:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         
-        # 尝试启用透明度 (X11 / Wayland)
         try:
             self.root.attributes("-alpha", 0.96)
         except Exception:
             pass
 
-        self.theme = "slate" # slate (蓝靛紫), emerald (青碧翠), mono (白金钛)
+        self.theme = "slate"
         self.percentage = 100.0
         self.reset_countdown = "--"
         self.reset_detail = "正在同步用量..."
@@ -132,13 +204,11 @@ class CodexFloatingBall:
         self.plan_type = "--"
         self.subscription_expiry = "--"
 
-        # 画布
         self.canvas = tk.Canvas(self.root, width=72, height=72, bg="#0E1016", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
         self.tooltip = ToolTip(self.root)
 
-        # 鼠标拖拽事件绑定
         self.drag_x = 0
         self.drag_y = 0
         self.canvas.bind("<Button-1>", self.on_press)
@@ -148,11 +218,8 @@ class CodexFloatingBall:
         self.canvas.bind("<Enter>", self.on_enter)
         self.canvas.bind("<Leave>", self.on_leave)
 
-        # 初始绘制与异步刷新
         self.draw_widget()
         self.refresh_async()
-
-        # 60 秒定时自动同步
         self.schedule_sync()
 
     def schedule_sync(self):
@@ -170,7 +237,6 @@ class CodexFloatingBall:
         self.root.geometry(f"+{x}+{y}")
 
     def on_release(self, event):
-        # 如果单纯点击没有拖拽位移，则触发即刻刷新
         pass
 
     def on_enter(self, event):
@@ -203,30 +269,28 @@ class CodexFloatingBall:
     def draw_widget(self):
         self.canvas.delete("all")
         
-        # 1. 深邃底板外边框
+        # 深底板
         self.canvas.create_oval(3, 3, 69, 69, fill="#12141C", outline="#252A38", width=1.5)
-        
-        # 2. 底槽灰色圆弧
+        # 槽轨
         self.canvas.create_oval(7, 7, 65, 65, outline="#1E2330", width=4)
 
-        # 3. 颜色主题色
         color_arc = "#38BDF8"
         if self.theme == "emerald":
             color_arc = "#34D399"
         elif self.theme == "mono":
             color_arc = "#E2E8F0"
 
-        # 4. 用量圆弧进度条
+        # 进度弧
         if self.percentage > 0:
             extent_deg = -(self.percentage / 100.0) * 359.9
             self.canvas.create_arc(7, 7, 65, 65, start=90, extent=extent_deg,
                                   outline=color_arc, width=4.5, style="arc")
 
-        # 5. 核心百分比文字 (15pt Bold 居中)
+        # 居中百分比
         pct_str = f"{int(self.percentage)}%" if self.percentage > 0 else "--"
         self.canvas.create_text(36, 31, text=pct_str, fill="#FFFFFF", font=("Segoe UI", 13, "bold"))
 
-        # 6. 倒计时文字 (8pt 居中)
+        # 居中倒计时
         self.canvas.create_text(36, 48, text=self.reset_countdown, fill="#94A3B8", font=("Segoe UI", 8, "bold"))
 
     def refresh_async(self):
@@ -239,13 +303,16 @@ class CodexFloatingBall:
         self.subscription_expiry = auth["subscription_expiry"]
 
         if not auth["access_token"]:
-            self.percentage = 0.0
-            self.reset_countdown = "--"
-            self.reset_detail = "未检测到本地登录凭据"
-            self.root.after(0, self.draw_widget)
-            return
+            new_tok = auto_refresh_token(auth)
+            if new_tok:
+                auth["access_token"] = new_tok
+            else:
+                self.percentage = 0.0
+                self.reset_countdown = "--"
+                self.reset_detail = "未检测到本地登录凭据"
+                self.root.after(0, self.draw_widget)
+                return
 
-        # 智能代理适配
         proxy_url = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or \
                     os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or \
                     os.environ.get("all_proxy") or os.environ.get("ALL_PROXY")
@@ -256,37 +323,51 @@ class CodexFloatingBall:
                 proxy_url = "http://" + proxy_url
             opener.add_handler(urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}))
 
-        req = urllib.request.Request("https://chatgpt.com/backend-api/wham/usage")
-        req.add_header("Authorization", "Bearer " + auth["access_token"])
-        req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
-        req.add_header("Accept", "application/json")
-        req.add_header("Origin", "https://chatgpt.com")
-        req.add_header("Referer", "https://chatgpt.com/")
-        if auth["account_id"]:
-            req.add_header("chatgpt-account-id", auth["account_id"])
+        def make_req(tok):
+            r = urllib.request.Request("https://chatgpt.com/backend-api/wham/usage")
+            r.add_header("Authorization", "Bearer " + tok)
+            r.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+            r.add_header("Accept", "application/json")
+            r.add_header("Origin", "https://chatgpt.com")
+            r.add_header("Referer", "https://chatgpt.com/")
+            if auth["account_id"]:
+                r.add_header("chatgpt-account-id", auth["account_id"])
+            return r
 
         try:
-            with opener.open(req, timeout=9) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                rate_limit = data.get("rate_limit", {})
-                primary = rate_limit.get("primary_window", {}) if rate_limit else {}
-                used_pct = float(primary.get("used_percent", 0.0))
-                self.percentage = max(0.0, min(100.0, 100.0 - used_pct))
-                sec = int(primary.get("reset_after_seconds", 0))
-
-                days = sec // 86400
-                hours = (sec % 86400) // 3600
-                mins = (sec % 3600) // 60
-
-                if days > 0:
-                    self.reset_countdown = f"{days}d"
-                    self.reset_detail = f"{days}天 {hours}小时后"
-                elif hours > 0:
-                    self.reset_countdown = f"{hours}h"
-                    self.reset_detail = f"{hours}小时 {mins}分钟后"
+            try:
+                resp = opener.open(make_req(auth["access_token"]), timeout=9)
+            except urllib.error.HTTPError as he:
+                if he.code == 401:
+                    new_tok = auto_refresh_token(auth)
+                    if new_tok:
+                        auth["access_token"] = new_tok
+                        resp = opener.open(make_req(new_tok), timeout=9)
+                    else:
+                        raise he
                 else:
-                    self.reset_countdown = f"{mins}m"
-                    self.reset_detail = f"{mins}分钟后"
+                    raise he
+
+            data = json.loads(resp.read().decode("utf-8"))
+            rate_limit = data.get("rate_limit", {})
+            primary = rate_limit.get("primary_window", {}) if rate_limit else {}
+            used_pct = float(primary.get("used_percent", 0.0))
+            self.percentage = max(0.0, min(100.0, 100.0 - used_pct))
+            sec = int(primary.get("reset_after_seconds", 0))
+
+            days = sec // 86400
+            hours = (sec % 86400) // 3600
+            mins = (sec % 3600) // 60
+
+            if days > 0:
+                self.reset_countdown = f"{days}d"
+                self.reset_detail = f"{days}天 ${hours}小时后"
+            elif hours > 0:
+                self.reset_countdown = f"{hours}h"
+                self.reset_detail = f"{hours}小时 {mins}分钟后"
+            else:
+                self.reset_countdown = f"{mins}m"
+                self.reset_detail = f"{mins}分钟后"
         except Exception:
             self.reset_detail = "正在连接网络..."
 
