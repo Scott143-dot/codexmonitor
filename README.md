@@ -11,6 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Go%20%7C%20C%23-blue?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-brightgreen?style=flat-square" alt="Platform">
+  <a href="https://linux.do/"><img src="https://img.shields.io/badge/Community-LINUX%20DO-orange?style=flat-square" alt="LINUX DO"></a>
   <img src="https://img.shields.io/badge/License-MIT-purple?style=flat-square" alt="License">
 </p>
 
@@ -40,7 +41,7 @@
 
 #### 🐧 Linux 状态栏与终端 (`linux/`)
 - 基于 Go 语言构建的独立可执行程序，单一二进制文件直接运行。
-- **系统状态栏常驻**：兼容 GNOME、KDE Plasma、XFCE 等全部桌面环境，在状态栏常驻展示发光进度环与实时用量百分比，支持右键暗黑详情菜单。
+- **系统状态栏常驻**：兼容 GNOME、KDE Plasma、XFCE 等全部桌面环境，在状态栏常驻展示发光进度环与实时用量百分比，支持右键暗黑详情菜单与一键开机自启。
 - **终端命令行模式**：支持 `--cli` 单次输出彩色仪表盘与 `--watch` 实时守护监控。
 
 ---
@@ -77,8 +78,8 @@
 #### 🐧 Linux
 ```bash
 cd linux
-go build -ldflags="-s -w" -o codex-monitor-linux-amd64 main.go
-chmod +x codex-monitor-linux-amd64
+go build -ldflags="-s -w" -o codex-monitor main.go
+chmod +x codex-monitor
 ```
 
 ---
@@ -107,6 +108,11 @@ CodexMonitor/
 ```
 
 ---
+
+### 💬 社区与讨论
+- 欢迎加入 **[LINUX DO — 中文开发者社区](https://linux.do/)** 交流与讨论！
+
+---
 ---
 
 <a name="english"></a>
@@ -129,7 +135,7 @@ CodexMonitor/
 
 #### 🐧 Linux Tray & CLI (`linux/`)
 - Built with Go as a standalone single executable binary.
-- **System Tray Widget**: Compatible with GNOME, KDE Plasma, XFCE, and other desktop environments. Displays a glowing progress ring with real-time percentage in the top/bottom status bar, with a dark dropdown details menu.
+- **System Tray Widget**: Compatible with GNOME, KDE Plasma, XFCE, and other desktop environments. Displays a glowing progress ring with real-time percentage in the top/bottom status bar, with a dark dropdown details menu and one-click auto-start toggle.
 - **CLI Terminal Mode**: Supports `--cli` single output dashboard and `--watch` real-time monitoring.
 
 ---
@@ -166,9 +172,14 @@ Run `build.bat` to compile with the built-in Windows `csc.exe` compiler.
 #### 🐧 Linux
 ```bash
 cd linux
-go build -ldflags="-s -w" -o codex-monitor-linux-amd64 main.go
-chmod +x codex-monitor-linux-amd64
+go build -ldflags="-s -w" -o codex-monitor main.go
+chmod +x codex-monitor
 ```
+
+---
+
+### 💬 Community
+- Join the discussion on **[LINUX DO — Chinese Developer Community](https://linux.do/)**!
 
 ---
 
