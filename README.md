@@ -3,6 +3,10 @@
 > A lightweight desktop & CLI monitor for OpenAI Codex / ChatGPT Plus & Pro quota tracking.  
 > 极轻量 (~40 KB) 的 OpenAI Codex / ChatGPT Plus & Pro 桌面与终端用量监控悬浮标。
 
+<p align="center">
+  <img src="assets/preview.png" alt="Codex Monitor Preview" width="280">
+</p>
+
 [English](#english) | [中文](#中文)
 
 ---
@@ -13,13 +17,29 @@
 ### 简介
 **Codex Monitor** 是一款专为 OpenAI Codex / ChatGPT 订阅用户打造的轻量监控工具。直接读取本地 `~/.codex/auth.json` 登录凭据（支持 `cc-switch` 订阅管理器），实时展示剩余用量百分比、7天重置倒计时与账号订阅到期日。
 
-### 特性
-- **Windows 原生悬浮球** (`src/`)：
-  - 基于 Windows 原生 `.NET 4.8`，GPU DirectX 硬件加速。
+<p align="center">
+  <img src="assets/widget.png" alt="Widget" width="130" style="margin-right: 20px;">
+  <img src="assets/menu.png" alt="Context Menu" width="180">
+</p>
+
+### 视觉特性与尾迹特效
+- **🪟 Windows 原生悬浮球** (`src/`)：
+  - 基于 Windows 原生 `.NET 4.8`，GPU DirectX 硬件加速，单文件仅 ~40 KB。
   - 支持**悬浮圆环 (72x72)** 与 **贴边胶囊 (42x96)** 平滑形变。
-  - 3 种拖拽流光尾迹（等离子闪电、东方水墨、七彩极光）与 3 种渐变配色（蓝靛紫、青碧翠、白金钛）。
+  - **三大全屏流光尾迹特效**：
+    - ⚡ **等离子闪电**：裂空分形电弧与等离子火花微粒；
+    - 🖌️ **东方水墨**：自然流体交织穿插墨丝与 38px 柔和浅灰烟雨水晕扩散；
+    - 🌈 **七彩极光**：6 色带混沌螺旋缠绕与金色星尘；
+  - **三大渐变配色**：蓝靛紫 / 青碧翠 / 白金钛。
   - 右键菜单一键开启/关闭开机自启。
-- **Linux 桌面与终端全能支持** (`linux/`)：
+
+<p align="center">
+  <img src="assets/trail-ink.png" alt="Traditional Chinese Ink Wash Trail" width="520">
+  <br>
+  <em>🖌️ 东方水墨 (挥毫泼墨) 真实流体渲染效果</em>
+</p>
+
+- **🐧 Linux 桌面与终端全能支持** (`linux/`)：
   - **桌面图形悬浮球** (`linux/codex-monitor-gui`)：基于 Python 官方标准库 Tkinter，零外部依赖，桌面置顶悬浮、自由拖拽与悬停卡片。
   - **终端独立执行程序源码** (`linux/main.go`)：纯 Go 静态编译，无外部运行时依赖。
 
@@ -54,6 +74,7 @@ chmod +x codex-monitor-linux-amd64 codex-monitor-gui
 CodexMonitor/
 ├── .github/workflows/
 │   └── release.yml          # GitHub Actions 自动化多平台编译与 Release 流水线
+├── assets/                  # 真实实机运行截图与特效展示
 ├── src/                     # Windows 原生 C# WPF 源码
 │   ├── Program.cs           # 互斥锁与入口
 │   ├── ApiService.cs        # 5 重自适应凭据探针与 OpenAI 官方请求
@@ -78,11 +99,16 @@ CodexMonitor/
 ### Introduction
 **Codex Monitor** is a lightweight desktop and CLI quota monitor for OpenAI Codex and ChatGPT Plus/Pro users. It reads local `~/.codex/auth.json` credentials (fully compatible with `cc-switch`) to display remaining quota percentages, 7-day reset countdowns, and subscription details in real time.
 
-### Features
+<p align="center">
+  <img src="assets/preview.png" alt="Codex Monitor Preview" width="280">
+</p>
+
+### Features & VFX
 - **Windows Desktop Widget** (`src/`):
   - Standalone executable (~40 KB), built on native `.NET 4.8` with zero dependencies.
   - GPU DirectX hardware acceleration with smooth morphing between **Floating Ring (72x72)** and **Docked Capsule (42x96)**.
-  - 3 visual trail effects (Lightning, Ink Wash, Aurora) and 3 gradient color themes.
+  - 3 visual trail effects: Plasma Lightning, Traditional Chinese Ink Wash, and Prismatic Aurora.
+  - 3 gradient themes: Blue-Indigo-Violet, Cyan-Emerald-Forest, Platinum-Gold-Titanium.
   - Auto-start toggle via context menu.
 - **Linux Desktop & CLI Suite** (`linux/`):
   - **Desktop GUI Widget** (`linux/codex-monitor-gui`): Built with Python standard library Tkinter (zero external dependencies), draggable floating widget with hover tooltip card.
