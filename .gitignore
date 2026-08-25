@@ -8,6 +8,8 @@
 *.pdb
 *.tmp
 *.log
+linux/codex-monitor
+codex-monitor
 
 # IDE & Editor files
 .vscode/
