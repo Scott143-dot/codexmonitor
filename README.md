@@ -35,16 +35,19 @@
 - **右键菜单**：切换配色主题、尾迹特效、开关开机自启。
 
 #### Linux / Docker 终端
-在终端中执行：
+仓库已内置静态编译好的 Linux 独立二进制可执行文件 **`linux/codex-monitor`**（零依赖，直接运行）：
 ```bash
-# 纯 Shell 脚本 (需系统自带 curl)
+# 方案 A：直接运行打包好的 Linux 二进制程序 (推荐)
+chmod +x linux/codex-monitor
+./linux/codex-monitor
+# 守护模式
+./linux/codex-monitor --watch
+
+# 方案 B：Linux 桌面原生 GUI 悬浮球 (需图形桌面环境)
+python3 linux/codex_monitor_gui.py
+
+# 方案 C：纯 Shell 脚本
 bash linux/codex-monitor.sh
-
-# Python 3 终端版
-python3 linux/codex_monitor.py
-
-# Python 3 实时监控模式 (每 60 秒刷新)
-python3 linux/codex_monitor.py --watch
 ```
 
 ### 源码编译 (Windows)

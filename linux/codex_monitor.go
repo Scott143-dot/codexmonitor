@@ -1,11 +1,14 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +35,10 @@ type UsageResponse struct {
 			ResetAfterSeconds int     `json:"reset_after_seconds"`
 		} `json:"primary_window"`
 	} `json:"rate_limit"`
+	Error struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error"`
 }
 
 func findAuthPath() string {
@@ -39,26 +46,29 @@ func findAuthPath() string {
 	candidates := []string{
 		filepath.Join(home, ".codex", "auth.json"),
 		filepath.Join(os.Getenv("HOME"), ".codex", "auth.json"),
+		filepath.Join(os.Getenv("USERPROFILE"), ".codex", "auth.json"),
 		"/root/.codex/auth.json",
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c
+		if c != "" {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
 		}
 	}
 	return ""
 }
 
-func main() {
+func queryUsage() {
 	authPath := findAuthPath()
 	if authPath == "" {
-		fmt.Println("\033[1;31m❌ 未检测到 ~/.codex/auth.json 凭据，请先在机器上登录 Codex\033[0m")
+		fmt.Println("❌ 未检测到 ~/.codex/auth.json 凭据文件")
 		return
 	}
 
 	bytes, err := ioutil.ReadFile(authPath)
 	if err != nil {
-		fmt.Printf("\033[1;31m❌ 读取 auth.json 失败: %v\033[0m\n", err)
+		fmt.Printf("❌ 读取 auth.json 失败: %v\n", err)
 		return
 	}
 
@@ -79,12 +89,11 @@ func main() {
 	}
 
 	if accessToken == "" {
-		fmt.Println("\033[1;31m❌ auth.json 中未找到 access_token\033[0m")
+		fmt.Println("❌ auth.json 中未找到 access_token")
 		return
 	}
 
-	// 解析 JWT payload 提取邮箱与到期时间
-	email := "已登录用户"
+	email := "ChatGPT 用户"
 	planType := "ChatGPT Plus"
 	expiry := "--"
 
@@ -106,7 +115,13 @@ func main() {
 				}
 				if authObj, ok := pMap["https://api.openai.com/auth"].(map[string]interface{}); ok {
 					if pt, ok := authObj["chatgpt_plan_type"].(string); ok && pt != "" {
-						planType = "ChatGPT " + strings.Title(pt)
+						if strings.Contains(strings.ToLower(pt), "pro") {
+							planType = "ChatGPT Pro"
+						} else if strings.Contains(strings.ToLower(pt), "team") {
+							planType = "ChatGPT Team"
+						} else {
+							planType = "ChatGPT Plus"
+						}
 					}
 					if until, ok := authObj["chatgpt_subscription_active_until"].(string); ok && len(until) >= 10 {
 						expiry = until[:10]
@@ -116,7 +131,36 @@ func main() {
 		}
 	}
 
-	// 请求 OpenAI 官方用量
+	// 智能代理自愈与 HTTP Transport 配置
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:           http.ProxyFromEnvironment,
+	}
+
+	proxyEnv := os.Getenv("https_proxy")
+	if proxyEnv == "" {
+		proxyEnv = os.Getenv("HTTPS_PROXY")
+	}
+	if proxyEnv == "" {
+		proxyEnv = os.Getenv("http_proxy")
+	}
+	if proxyEnv == "" {
+		proxyEnv = os.Getenv("all_proxy")
+	}
+	if proxyEnv != "" {
+		if !strings.HasPrefix(proxyEnv, "http://") && !strings.HasPrefix(proxyEnv, "https://") && !strings.HasPrefix(proxyEnv, "socks5://") {
+			proxyEnv = "http://" + proxyEnv
+		}
+		if pURL, err := url.Parse(proxyEnv); err == nil {
+			transport.Proxy = http.ProxyURL(pURL)
+		}
+	}
+
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
+	}
+
 	req, _ := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
@@ -127,60 +171,89 @@ func main() {
 		req.Header.Set("chatgpt-account-id", accountID)
 	}
 
-	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 
-	remainingPct := 100.0
+	remainingPctStr := "--"
 	resetCd := "--"
-	resetDt := "正在连接网络更新用量..."
+	resetDt := "正在连接网络 (请检查代理设置)"
+	pctVal := 0.0
 
-	if err == nil && resp.StatusCode == 200 {
+	if err == nil {
 		defer resp.Body.Close()
 		body, _ := ioutil.ReadAll(resp.Body)
 		var uResp UsageResponse
 		if err := json.Unmarshal(body, &uResp); err == nil {
-			if uResp.Email != "" {
-				email = uResp.Email
-			}
-			remainingPct = 100.0 - uResp.RateLimit.PrimaryWindow.UsedPercent
-			if remainingPct < 0 {
-				remainingPct = 0
-			}
+			if uResp.Error.Code == "token_expired" {
+				resetDt = "Token 已过期 (请重新登录更新 auth.json)"
+			} else if resp.StatusCode == 200 {
+				if uResp.Email != "" {
+					email = uResp.Email
+				}
+				pctVal = 100.0 - uResp.RateLimit.PrimaryWindow.UsedPercent
+				if pctVal < 0 {
+					pctVal = 0
+				}
+				if pctVal > 100 {
+					pctVal = 100
+				}
+				remainingPctStr = fmt.Sprintf("%d", int(pctVal))
 
-			sec := uResp.RateLimit.PrimaryWindow.ResetAfterSeconds
-			days := sec / 86400
-			hours := (sec % 86400) / 3600
-			mins := (sec % 3600) / 60
+				sec := uResp.RateLimit.PrimaryWindow.ResetAfterSeconds
+				days := sec / 86400
+				hours := (sec % 86400) / 3600
+				mins := (sec % 3600) / 60
 
-			if days > 0 {
-				resetCd = fmt.Sprintf("%dd", days)
-				resetDt = fmt.Sprintf("%d天 %d小时后", days, hours)
-			} else if hours > 0 {
-				resetCd = fmt.Sprintf("%dh", hours)
-				resetDt = fmt.Sprintf("%d小时 %d分钟后", hours, mins)
-			} else {
-				resetCd = fmt.Sprintf("%dm", mins)
-				resetDt = fmt.Sprintf("%d分钟后", mins)
+				if days > 0 {
+					resetCd = fmt.Sprintf("%dd", days)
+					resetDt = fmt.Sprintf("%d天 %d小时后", days, hours)
+				} else if hours > 0 {
+					resetCd = fmt.Sprintf("%dh", hours)
+					resetDt = fmt.Sprintf("%d小时 %d分钟后", hours, mins)
+				} else {
+					resetCd = fmt.Sprintf("%dm", mins)
+					resetDt = fmt.Sprintf("%d分钟后", mins)
+				}
 			}
 		}
 	}
 
-	// ANSI 彩色渐变进度条渲染
-	filled := int((remainingPct / 100.0) * 24.0)
-	empty := 24 - filled
+	// 渲染进度条 (兼顾 ANSI 终端与标准 ASCII)
+	totalBlocks := 20
+	filled := 0
+	if remainingPctStr != "--" {
+		filled = int((pctVal / 100.0) * float64(totalBlocks))
+	}
+	empty := totalBlocks - filled
 
-	barFill1 := strings.Repeat("█", filled/2)
-	barFill2 := strings.Repeat("█", filled-filled/2)
-	barEmpty := strings.Repeat("░", empty)
+	barFill := strings.Repeat("#", filled)
+	barEmpty := strings.Repeat("-", empty)
 
-	fmt.Println("\033[1;36m┌────────────────────────────────────────────────────────┐\033[0m")
-	fmt.Println("\033[1;36m│\033[0m  \033[1;37m⚡ Codex Monitor (Linux 原生 Go 二进制版)\033[0m             \033[1;36m│\033[0m")
-	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────┤\033[0m")
-	fmt.Printf("\033[1;36m│\033[0m  📧 账号: \033[1;32m%-42s\033[0m \033[1;36m│\033[0m\n", email)
-	fmt.Printf("\033[1;36m│\033[0m  💎 类型: \033[1;35m%-42s\033[0m \033[1;36m│\033[0m\n", planType)
-	fmt.Printf("\033[1;36m│\033[0m  📅 到期: \033[1;33m%-42s\033[0m \033[1;36m│\033[0m\n", expiry)
-	fmt.Printf("\033[1;36m│\033[0m  ⏱️  重置: \033[1;34m%-42s\033[0m \033[1;36m│\033[0m\n", resetDt)
-	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────┤\033[0m")
-	fmt.Printf("\033[1;36m│\033[0m  剩余额度: \033[1;37m%3d%%\033[0m [\033[38;2;56;189;248m%s\033[38;2;129;140;248m%s\033[90m%s\033[0m] (%-3s) \033[1;36m│\033[0m\n", int(remainingPct), barFill1, barFill2, barEmpty, resetCd)
-	fmt.Println("\033[1;36m└────────────────────────────────────────────────────────┘\033[0m")
+	fmt.Println("==================================================")
+	fmt.Println("  ⚡ Codex Monitor (Linux Standalone ELF Binary)")
+	fmt.Println("==================================================")
+	fmt.Printf("  邮箱: %s\n", email)
+	fmt.Printf("  计划: %s\n", planType)
+	fmt.Printf("  到期: %s\n", expiry)
+	fmt.Printf("  重置: %s\n", resetDt)
+	fmt.Println("--------------------------------------------------")
+	fmt.Printf("  额度: %3s%% [%s%s] (%s)\n", remainingPctStr, barFill, barEmpty, resetCd)
+	fmt.Println("==================================================")
+}
+
+func main() {
+	watchFlag := flag.Bool("watch", false, "实时守护监控模式 (每 60 秒自动刷新)")
+	flag.BoolVar(watchFlag, "w", false, "实时守护监控模式 (缩写)")
+	flag.Parse()
+
+	if *watchFlag {
+		fmt.Print("\033[2J\033[H")
+		for {
+			fmt.Print("\033[H")
+			queryUsage()
+			fmt.Println("\n(实时监控中... 每 60 秒刷新一次，按 Ctrl+C 退出)")
+			time.Sleep(60 * time.Second)
+		}
+	} else {
+		queryUsage()
+	}
 }
