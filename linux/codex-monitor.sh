@@ -95,12 +95,16 @@ RESET_SEC=$(echo "$RESP" | grep -o '"reset_after_seconds": *[0-9]*' | head -n1 |
 
 REMAINING_PCT="--"
 RESET_CD="--"
-RESET_DT="正在连接网络 (执行 bash codex-monitor.sh --debug 查看详情)"
 
-if [ -n "$USED_PCT" ]; then
+if echo "$RESP" | grep -q "token_expired"; then
+    RESET_DT="Token 已过期 (请重新登录更新 auth.json)"
+elif [ -n "$USED_PCT" ]; then
     REMAINING_PCT=$((100 - USED_PCT))
     [ $REMAINING_PCT -lt 0 ] && REMAINING_PCT=0
     [ $REMAINING_PCT -gt 100 ] && REMAINING_PCT=100
+    RESET_DT="网络已同步"
+else
+    RESET_DT="正在连接网络 (执行 --debug 查看详情)"
 fi
 
 if [ -n "$RESET_SEC" ]; then
