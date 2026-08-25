@@ -47,20 +47,24 @@
 
 ### 下载与使用
 
-#### 📦 下载预编译版本
-前往 [**Releases 页面**](https://github.com/Scott143-dot/CodexMonitor/releases) 下载最新编译好的程序：
+#### 📦 下载预编译版本 (GitHub Releases)
+前往 [**Releases 页面**](https://github.com/Scott143-dot/CodexMonitor/releases) 根据您的操作系统与 CPU 架构下载：
 
-- **Windows 用户**：下载 `CodexMonitor.exe` 直接运行。
-- **Linux 用户**：下载 `codex-monitor-linux-amd64.tar.gz` 解压后直接运行：
+| 资产文件名 (File Asset) | 适用操作系统 (OS) | CPU 架构 (Architecture) | 运行方式 |
+| :--- | :--- | :--- | :--- |
+| **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64** | 双击直接运行 |
+| **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64** | 解压后运行 `./codex-monitor -d` |
+
+- **Linux 常用运行命令**：
   ```bash
-  # 启动状态栏托盘 (后台守护运行，关掉终端不退出)
-  ./codex-monitor-linux-amd64 -d
+  # 启动状态栏托盘 (后台常驻，关闭终端不退出)
+  ./codex-monitor -d
 
   # 终端命令行模式
-  ./codex-monitor-linux-amd64 --cli
+  ./codex-monitor --cli
 
   # 终端实时守护监控
-  ./codex-monitor-linux-amd64 --watch
+  ./codex-monitor --watch
   ```
 
 ---
@@ -132,20 +136,24 @@ CodexMonitor/
 
 ### Download & Usage
 
-#### 📦 Download Precompiled Binaries
-Visit the [**Releases Page**](https://github.com/Scott143-dot/CodexMonitor/releases) to download the latest builds:
+#### 📦 Download Precompiled Binaries (GitHub Releases)
+Visit the [**Releases Page**](https://github.com/Scott143-dot/CodexMonitor/releases) to download the latest builds for your OS & Architecture:
 
-- **Windows**: Download `CodexMonitor.exe` and run.
-- **Linux**: Download `codex-monitor-linux-amd64.tar.gz`, unpack and run:
+| Asset File | Operating System (OS) | Architecture | Usage |
+| :--- | :--- | :--- | :--- |
+| **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64** | Double click to run |
+| **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64** | Unpack and run `./codex-monitor -d` |
+
+- **Linux Common Commands**:
   ```bash
   # Launch System Tray Widget in daemon mode
-  ./codex-monitor-linux-amd64 -d
+  ./codex-monitor -d
 
   # CLI Terminal Dashboard
-  ./codex-monitor-linux-amd64 --cli
+  ./codex-monitor --cli
 
   # Real-time monitoring
-  ./codex-monitor-linux-amd64 --watch
+  ./codex-monitor --watch
   ```
 
 ---
