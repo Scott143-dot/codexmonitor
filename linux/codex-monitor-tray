@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Codex Monitor Tray (Cross-Platform Top Bar & System Tray)
-跨平台任务栏 / 状态栏常驻小工具
-- Linux: 常驻在 Ubuntu / GNOME 顶部状态栏 (Top Bar AppIndicator)
-- Windows: 常驻在 Windows 屏幕右下角任务栏托盘 (System Tray)
-显示实时用量：⚡ 68% (5d)
+Codex Monitor Tray (Linux Top Bar & System Tray)
+Linux 原生状态栏常驻小工具 (XFCE / GNOME / KDE / Ubuntu)
+在屏幕右上角状态栏常驻显示发光用量图标与实时百分比
 """
 
 import os
@@ -26,11 +24,12 @@ def find_auth_json():
         os.path.expanduser("~/.cc-switch/current/auth.json"),
         os.path.expanduser("~/.cc-switch/auth.json"),
         os.path.expanduser("~/.config/cc-switch/auth.json"),
-        os.path.join(os.environ.get("USERPROFILE", ""), ".codex", "auth.json"),
+        "/config/.codex/auth.json",
         "/root/.codex/auth.json",
         "/root/.cc-switch/current/auth.json",
         "/root/.cc-switch/auth.json",
         "/root/.config/cc-switch/auth.json",
+        os.path.join(os.environ.get("USERPROFILE", ""), ".codex", "auth.json"),
     ]
     for c in candidates:
         if c and os.path.isfile(c):
@@ -126,7 +125,7 @@ def auto_refresh_token(auth_info):
 
     req = urllib.request.Request("https://auth.openai.com/oauth/token", data=body)
     req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
 
     try:
         with opener.open(req, timeout=10) as resp:
@@ -153,14 +152,16 @@ def auto_refresh_token(auth_info):
         pass
     return None
 
-class CrossPlatformTrayMonitor:
+class UniversalTrayMonitor:
     def __init__(self):
+        self.percentage = 100.0
         self.percentage_str = "--"
         self.reset_cd = "--"
         self.reset_detail = "正在连接网络..."
         self.email = "检测中..."
         self.plan_type = "--"
         self.subscription_expiry = "--"
+        self.icon = None
 
     def fetch_data(self):
         auth = fetch_local_auth()
@@ -191,7 +192,7 @@ class CrossPlatformTrayMonitor:
         def make_req(tok):
             r = urllib.request.Request("https://chatgpt.com/backend-api/wham/usage")
             r.add_header("Authorization", "Bearer " + tok)
-            r.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            r.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
             r.add_header("Accept", "application/json")
             r.add_header("Origin", "https://chatgpt.com")
             r.add_header("Referer", "https://chatgpt.com/")
@@ -217,8 +218,8 @@ class CrossPlatformTrayMonitor:
             rate_limit = data.get("rate_limit", {})
             primary = rate_limit.get("primary_window", {}) if rate_limit else {}
             used_pct = float(primary.get("used_percent", 0.0))
-            pct_val = max(0.0, min(100.0, 100.0 - used_pct))
-            self.percentage_str = f"{int(pct_val)}%"
+            self.percentage = max(0.0, min(100.0, 100.0 - used_pct))
+            self.percentage_str = f"{int(self.percentage)}%"
             sec = int(primary.get("reset_after_seconds", 0))
 
             days = sec // 86400
@@ -237,180 +238,110 @@ class CrossPlatformTrayMonitor:
         except Exception:
             self.reset_detail = "正在连接网络..."
 
-    def run_windows_tray(self):
-        """Windows 本地测试：使用简易 Tkinter 模拟 Windows 任务栏菜单与状态"""
-        import tkinter as tk
-        from tkinter import Menu
+    def create_tray_image(self):
+        """动态绘制高清托盘图标：深黑底 + 霓虹蓝光进度圆环 + 百分比数字"""
+        from PIL import Image, ImageDraw, ImageFont
 
-        root = tk.Tk()
-        root.title("Codex Monitor Tray (Windows 测试模式)")
-        root.geometry("380x280+350+300")
-        root.configure(bg="#0E1118")
+        img = Image.new('RGBA', (64, 64), color=(0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
 
-        title_lbl = tk.Label(root, text="⚡ 正在加载任务栏状态...", font=("Segoe UI", 16, "bold"), fg="#38BDF8", bg="#0E1118", pady=15)
-        title_lbl.pack()
+        # 绘制深色底圈
+        draw.ellipse([4, 4, 60, 60], fill=(18, 20, 28, 255), outline=(37, 42, 56, 255), width=2)
+        # 绘制背景灰色槽轨
+        draw.ellipse([8, 8, 56, 56], outline=(30, 35, 48, 255), width=4)
 
-        frame = tk.Frame(root, bg="#181C26", bd=1, relief="solid", highlightbackground="#2D3748", highlightthickness=1)
-        frame.pack(padx=20, pady=5, fill="both", expand=True)
+        # 绘制青蓝进度圆弧
+        extent = -(self.percentage / 100.0) * 360.0
+        draw.arc([8, 8, 56, 56], start=90, end=90 + extent, fill=(56, 189, 248, 255), width=5)
 
-        lbl_email = tk.Label(frame, text="📧 账号: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
-        lbl_email.pack(fill="x")
+        # 绘制中间百分比文字
+        txt = f"{int(self.percentage)}"
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+        except Exception:
+            font = ImageFont.load_default()
 
-        lbl_plan = tk.Label(frame, text="💎 类型: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
-        lbl_plan.pack(fill="x")
+        # 居中文字
+        draw.text((20 if len(txt) == 2 else (14 if len(txt) == 3 else 26), 18), txt, fill=(255, 255, 255, 255), font=font)
+        return img
 
-        lbl_expiry = tk.Label(frame, text="📅 到期: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
-        lbl_expiry.pack(fill="x")
+    def run_pystray(self):
+        import pystray
+        from pystray import MenuItem as item, Menu
 
-        lbl_reset = tk.Label(frame, text="⏱️ 重置: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
-        lbl_reset.pack(fill="x")
+        def get_status_text(icon):
+            return f"⚡ 额度: {self.percentage_str} ({self.reset_cd})"
 
-        btn_box = tk.Frame(root, bg="#0E1118", pady=10)
-        btn_box.pack(fill="x")
+        def get_email_text(icon):
+            return f"📧 账号: {self.email}"
 
-        def update_ui():
-            title_lbl.config(text=f"⚡ 任务栏显示: ⚡ {self.percentage_str} ({self.reset_cd})")
-            lbl_email.config(text=f"📧 账号: {self.email}")
-            lbl_plan.config(text=f"💎 类型: {self.plan_type}")
-            lbl_expiry.config(text=f"📅 到期: {self.subscription_expiry}")
-            lbl_reset.config(text=f"⏱️ 重置: {self.reset_detail}")
+        def get_plan_text(icon):
+            return f"💎 类型: {self.plan_type}"
 
-        def do_refresh():
+        def get_expiry_text(icon):
+            return f"📅 到期: {self.subscription_expiry}"
+
+        def get_reset_text(icon):
+            return f"⏱️ 重置: {self.reset_detail}"
+
+        def do_refresh(icon, item):
             def _th():
                 self.fetch_data()
-                root.after(0, update_ui)
+                icon.icon = self.create_tray_image()
+                icon.title = f"Codex: {self.percentage_str} ({self.reset_cd})"
+                icon.update_menu()
             threading.Thread(target=_th, daemon=True).start()
 
-        btn_refresh = tk.Button(btn_box, text="🔄 立即刷新", font=("Segoe UI", 9, "bold"), bg="#2563EB", fg="#FFFFFF", activebackground="#1D4ED8", bd=0, padx=12, pady=5, command=do_refresh)
-        btn_refresh.pack(side="left", padx=25)
+        def do_quit(icon, item):
+            icon.stop()
 
-        btn_quit = tk.Button(btn_box, text="❌ 退出测试", font=("Segoe UI", 9), bg="#374151", fg="#F1F5F9", activebackground="#4B5563", bd=0, padx=12, pady=5, command=root.destroy)
-        btn_quit.pack(side="right", padx=25)
+        self.fetch_data()
+        menu = Menu(
+            item(get_status_text, None, enabled=False),
+            Menu.SEPARATOR,
+            item(get_email_text, None, enabled=False),
+            item(get_plan_text, None, enabled=False),
+            item(get_expiry_text, None, enabled=False),
+            item(get_reset_text, None, enabled=False),
+            Menu.SEPARATOR,
+            item("🔄 立即刷新", do_refresh),
+            item("❌ 退出", do_quit)
+        )
 
-        do_refresh()
-        root.mainloop()
-
-    def run_linux_gtk(self):
-        """Linux 原生顶部状态栏 AppIndicator"""
-        import gi
-        gi.require_version('Gtk', '3.0')
-        try:
-            gi.require_version('AppIndicator3', '0.1')
-            from gi.repository import AppIndicator3 as appindicator
-        except Exception:
-            try:
-                gi.require_version('AyatanaAppIndicator3', '0.1')
-                from gi.repository import AyatanaAppIndicator3 as appindicator
-            except Exception:
-                appindicator = None
-
-        from gi.repository import Gtk, GLib
-
-        if appindicator:
-            indicator = appindicator.Indicator.new(
-                "codex-monitor",
-                "utilities-system-monitor",
-                appindicator.IndicatorCategory.APPLICATION_STATUS
-            )
-            indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
-            indicator.set_label("⚡ --", "100%")
-        else:
-            indicator = None
-
-        menu = Gtk.Menu()
-        status_item = Gtk.MenuItem(label="⚡ 额度: --")
-        status_item.set_sensitive(False)
-        menu.append(status_item)
-
-        menu.append(Gtk.SeparatorMenuItem())
-        email_item = Gtk.MenuItem(label="📧 账号: --")
-        email_item.set_sensitive(False)
-        menu.append(email_item)
-
-        plan_item = Gtk.MenuItem(label="💎 类型: --")
-        plan_item.set_sensitive(False)
-        menu.append(plan_item)
-
-        expiry_item = Gtk.MenuItem(label="📅 到期: --")
-        expiry_item.set_sensitive(False)
-        menu.append(expiry_item)
-
-        reset_item = Gtk.MenuItem(label="⏱️ 重置: --")
-        reset_item.set_sensitive(False)
-        menu.append(reset_item)
-
-        menu.append(Gtk.SeparatorMenuItem())
-        refresh_item = Gtk.MenuItem(label="🔄 立即刷新")
-        refresh_item.connect("activate", lambda _: threading.Thread(target=self.fetch_data, daemon=True).start())
-        menu.append(refresh_item)
-
-        quit_item = Gtk.MenuItem(label="❌ 退出")
-        quit_item.connect("activate", lambda _: Gtk.main_quit())
-        menu.append(quit_item)
-
-        menu.show_all()
-        if indicator:
-            indicator.set_menu(menu)
-
-        def update_ui():
-            label_text = f"⚡ {self.percentage_str} ({self.reset_cd})"
-            if indicator:
-                indicator.set_label(label_text, "100% (99d)")
-            status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} (重置倒计时: {self.reset_cd})")
-            email_item.set_label(f"📧 账号: {self.email}")
-            plan_item.set_label(f"💎 类型: {self.plan_type}")
-            expiry_item.set_label(f"📅 到期: {self.subscription_expiry}")
-            reset_item.set_label(f"⏱️ 重置: {self.reset_detail}")
-            return False
+        self.icon = pystray.Icon(
+            "codex-monitor",
+            self.create_tray_image(),
+            f"Codex: {self.percentage_str} ({self.reset_cd})",
+            menu
+        )
 
         def poll_loop():
             while True:
-                self.fetch_data()
-                GLib.idle_add(update_ui)
                 time.sleep(60)
+                self.fetch_data()
+                if self.icon:
+                    self.icon.icon = self.create_tray_image()
+                    self.icon.title = f"Codex: {self.percentage_str} ({self.reset_cd})"
+                    self.icon.update_menu()
 
         threading.Thread(target=poll_loop, daemon=True).start()
-        Gtk.main()
-
-    def run_test_mode(self):
-        print("==================================================")
-        print("🖥️  Linux 顶部任务栏 / 状态栏功能模拟测试 (--test)")
-        print("==================================================")
-        print("1. 正在拉取 OpenAI 官方用量与本地凭据...")
-        self.fetch_data()
-        
-        tray_label = f"⚡ {self.percentage_str} ({self.reset_cd})"
-        print("\n2. [顶部状态栏常驻标题]:")
-        print(f"   👉  {tray_label}")
-        
-        print("\n3. [点击顶部标题弹出的暗黑下拉菜单项]:")
-        print(f"   ├─ ⚡ 剩余额度: {self.percentage_str} (重置倒计时: {self.reset_cd})")
-        print(f"   ├─ ──────────────────────────────────────────")
-        print(f"   ├─ 📧 账号: {self.email}")
-        print(f"   ├─ 💎 类型: {self.plan_type}")
-        print(f"   ├─ 📅 到期: {self.subscription_expiry}")
-        print(f"   ├─ ⏱️ 重置: {self.reset_detail}")
-        print(f"   ├─ ──────────────────────────────────────────")
-        print(f"   ├─ 🔄 [按钮] 立即刷新")
-        print(f"   └─ ❌ [按钮] 退出")
-        print("==================================================")
-        print("✅ 任务栏全部数据与菜单回调装配测试 100% 通过！")
-        print("==================================================")
+        print("🚀 Codex Monitor 托盘已成功挂载到系统状态栏！(查看屏幕右上角)")
+        self.icon.run()
 
     def run(self):
         for arg in sys.argv[1:]:
-            if arg in ["--test", "-t", "--dry-run"]:
-                self.run_test_mode()
+            if arg in ["--test", "-t"]:
+                self.fetch_data()
+                print(f"⚡ 额度: {self.percentage_str} ({self.reset_cd})")
+                print(f"📧 账号: {self.email}")
+                print(f"💎 类型: {self.plan_type}")
                 return
 
-        if sys.platform == "win32":
-            self.run_windows_tray()
-        else:
-            try:
-                self.run_linux_gtk()
-            except Exception:
-                self.run_test_mode()
+        try:
+            self.run_pystray()
+        except Exception as e:
+            print(f"❌ 托盘启动异常 ({e})")
 
 if __name__ == "__main__":
-    app = CrossPlatformTrayMonitor()
+    app = UniversalTrayMonitor()
     app.run()
