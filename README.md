@@ -30,18 +30,22 @@
 - ⚡ **智能刷新**：默认每 60 秒后台自动同步一次，支持单击或右键菜单即刻手动刷新。
 - 🔄 **自动续期**：检测到 Token 过期时自动调用官方 OAuth 接口刷新并持久化写回凭据文件。
 
-### 核心特性
+### 双端形态与核心特性
 
-#### 🪟 Windows 桌面端 (`src/`)
+> 💡 **平台形态说明**：  
+> - **Windows** 采用 **桌面悬浮标** 形态（支持在桌面上自由拖拽、贴边吸附与全屏流光尾迹）；  
+> - **Linux** 采用 **系统状态栏托盘** 形态（常驻于屏幕顶部/底部任务栏，不占桌面空间，无悬浮拖拽），同时提供终端命令行仪表盘。
+
+#### 🪟 Windows 桌面悬浮标 (`src/`)
 - 基于 C# (.NET 4.8 / WPF) 构建，GPU DirectX 硬件加速渲染，体积仅 ~40 KB。
-- 支持**悬浮圆环 (72x72)** 与 **贴边胶囊 (42x96)** 平滑形变。
+- 支持**桌面自由拖拽**，并在**悬浮圆环 (72x72)** 与 **贴边胶囊 (42x96)** 间平滑形变。
 - **三大流光尾迹**：等离子闪电、东方水墨、七彩极光。
 - **三大渐变配色**：蓝靛紫、青碧翠、白金钛。
 - 支持右键菜单一键切换开机自启。
 
-#### 🐧 Linux 状态栏与终端 (`linux/`)
-- 基于 Go 语言构建的独立可执行程序，单一二进制文件直接运行。
-- **系统状态栏常驻**：兼容 GNOME、KDE Plasma、XFCE 等全部桌面环境，在状态栏常驻展示发光进度环与实时用量百分比，支持右键暗黑详情菜单与一键开机自启。
+#### 🐧 Linux 系统状态栏与终端 (`linux/`)
+- 基于 Go 语言构建的单一独立二进制程序，直接运行。
+- **原生状态栏常驻（无桌面悬浮拖拽）**：常驻于屏幕顶部/底部状态栏（时钟旁），动态光栅化渲染发光圆弧与用量百分比，支持右键暗黑详情菜单与一键开机自启。
 - **终端命令行模式**：支持 `--cli` 单次输出彩色仪表盘与 `--watch` 实时守护监控。
 
 ---
@@ -51,10 +55,10 @@
 #### 📦 下载预编译版本 (GitHub Releases)
 前往 [**Releases 页面**](https://github.com/Scott143-dot/CodexMonitor/releases) 根据您的操作系统与 CPU 架构下载：
 
-| 资产文件名 (File Asset) | 适用操作系统 (OS) | CPU 架构 (Architecture) | 运行方式 |
-| :--- | :--- | :--- | :--- |
-| **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64** | 双击直接运行 |
-| **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64** | 解压后运行 `./codex-monitor -d` |
+| 资产文件名 (File Asset) | 适用操作系统 (OS) | CPU 架构 (Architecture) | 平台形态 | 运行方式 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64** | 桌面可拖拽悬浮标 | 双击直接运行 |
+| **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64** | 系统状态栏托盘 / 终端 | 解压后运行 `./codex-monitor -d` |
 
 - **Linux 常用运行命令**：
   ```bash
@@ -73,7 +77,7 @@
 ### 源码编译
 
 #### 🪟 Windows
-双击运行 `build.bat`，调用系统内置 `csc.exe` 编译生成 `CodexMonitor.exe`。
+双击运行 `build.bat`，调用系统内置 `csc.exe` 编译生成 `CodexMonitor-windows-x64.exe`。
 
 #### 🐧 Linux
 ```bash
@@ -91,13 +95,13 @@ CodexMonitor/
 ├── .github/workflows/
 │   └── release.yml          # GitHub Actions 自动化跨平台编译与 Release 流水线
 ├── assets/                  # 真实运行展示图片
-├── src/                     # Windows C# WPF 源码
+├── src/                     # Windows C# WPF 源码 (桌面可拖拽悬浮标)
 │   ├── Program.cs           # 单实例互斥锁与入口
 │   ├── ApiService.cs        # 凭据自适应解析与 OpenAI 官方请求
 │   ├── ConfigManager.cs     # 本地配置持久化
 │   ├── MainWindow.cs        # 悬浮标核心组件与形态变换
 │   └── TrailOverlay.cs      # 全屏流光尾迹渲染系统
-├── linux/                   # Linux Go 源码
+├── linux/                   # Linux Go 源码 (状态栏托盘与终端一体化)
 │   ├── go.mod               # Go 模块配置
 │   ├── go.sum               # Go 依赖校验
 │   └── main.go              # 状态栏托盘与终端一体化源码
@@ -124,18 +128,22 @@ CodexMonitor/
 - ⚡ **Smart Refresh**: Automatically refreshes every 60 seconds in the background, with instant manual refresh on click or via menu.
 - 🔄 **OAuth Auto-Renewal**: Automatically renews expired tokens and persists them back to the local credentials file.
 
-### Features
+### Dual Form Factors & Features
 
-#### 🪟 Windows Desktop (`src/`)
+> 💡 **Platform Design Note**:  
+> - **Windows** runs as a **Floating Desktop Widget** (supports free dragging, edge snapping, and visual trails).  
+> - **Linux** runs as a **Native System Tray Widget** (sits quietly in the top/bottom status bar without desktop floating windows), alongside a CLI terminal dashboard.
+
+#### 🪟 Windows Desktop Widget (`src/`)
 - Built with C# (.NET 4.8 / WPF), GPU DirectX hardware acceleration, single binary ~40 KB.
-- Smooth morphing between **Floating Ring (72x72)** and **Docked Capsule (42x96)**.
+- Supports **free desktop dragging** with smooth morphing between **Floating Ring (72x72)** and **Docked Capsule (42x96)**.
 - **3 Visual Trail Effects**: Plasma Lightning, Traditional Chinese Ink Wash, and Prismatic Aurora.
 - **3 Gradient Themes**: Blue-Indigo-Violet, Cyan-Emerald-Forest, Platinum-Gold-Titanium.
 - Auto-start toggle via context menu.
 
-#### 🐧 Linux Tray & CLI (`linux/`)
+#### 🐧 Linux System Tray & CLI (`linux/`)
 - Built with Go as a standalone single executable binary.
-- **System Tray Widget**: Compatible with GNOME, KDE Plasma, XFCE, and other desktop environments. Displays a glowing progress ring with real-time percentage in the top/bottom status bar, with a dark dropdown details menu and one-click auto-start toggle.
+- **Native Status Bar Tray (No floating windows)**: Integrates seamlessly into the top/bottom panel (next to the clock), dynamically rasterizing glowing progress arcs and percentages, with a dark context menu and auto-start toggle.
 - **CLI Terminal Mode**: Supports `--cli` single output dashboard and `--watch` real-time monitoring.
 
 ---
@@ -145,10 +153,10 @@ CodexMonitor/
 #### 📦 Download Precompiled Binaries (GitHub Releases)
 Visit the [**Releases Page**](https://github.com/Scott143-dot/CodexMonitor/releases) to download the latest builds for your OS & Architecture:
 
-| Asset File | Operating System (OS) | Architecture | Usage |
-| :--- | :--- | :--- | :--- |
-| **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64** | Double click to run |
-| **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64** | Unpack and run `./codex-monitor -d` |
+| Asset File | Operating System (OS) | Architecture | Form Factor | Usage |
+| :--- | :--- | :--- | :--- | :--- |
+| **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64** | Draggable Floating Widget | Double click to run |
+| **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64** | System Tray / CLI | Unpack and run `./codex-monitor -d` |
 
 - **Linux Common Commands**:
   ```bash
