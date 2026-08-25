@@ -26,6 +26,9 @@
 ### 简介
 **Codex Monitor** 是一款专为 OpenAI Codex / ChatGPT 订阅用户打造的极轻量用量监控小工具。直接读取本地 `~/.codex/auth.json` 登录凭据（支持 `cc-switch` 订阅管理器），实时展示剩余用量百分比、7天重置倒计时与账号订阅到期日。
 
+- ⚡ **智能刷新策略**：默认后台**每 60 秒（1 分钟）自动静默刷新**，同时支持左键点击或右键菜单**即刻手动刷新**。
+- 🔄 **自动续期保障**：检测到 Token 过期时自动调用官方 OAuth 接口静默刷新并持久化写回凭据文件。
+
 ### 特性与双端形态 (全部 100% 原生，零 Python 依赖)
 - **🪟 Windows 桌面端** (`src/`)：
   - 基于 Windows 原生 `.NET 4.8`，GPU DirectX 硬件加速，单文件仅 ~40 KB。
@@ -111,6 +114,9 @@ CodexMonitor/
 
 ### Introduction
 **Codex Monitor** is a lightweight desktop and CLI quota monitor for OpenAI Codex and ChatGPT Plus/Pro users. It reads local `~/.codex/auth.json` credentials (fully compatible with `cc-switch`) to display remaining quota percentages, 7-day reset countdowns, and subscription details in real time.
+
+- ⚡ **Smart Refresh Strategy**: Automatically refreshes in background **every 60 seconds**, with support for instant manual refresh via click or menu.
+- 🔄 **OAuth Auto-Renewal**: Automatically renews expired tokens and persists them back to the local credentials file.
 
 ### Features & Platform Support (100% Native, Zero Python Dependencies)
 - **Windows Desktop** (`src/`):
