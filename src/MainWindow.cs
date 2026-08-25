@@ -344,7 +344,11 @@ namespace CodexMonitor
             _morphTimer.Stop();
             _infoPopup.IsOpen = false;
             _dragStartOffset = e.GetPosition(this);
-            if (_trail != null) _trail.ResetLastPoint();
+            if (_trail != null)
+            {
+                _trail.ResetLastPoint();
+                _trail.EnsureTopmost();
+            }
             CaptureMouse();
         }
 
@@ -373,6 +377,7 @@ namespace CodexMonitor
 
                 if (_trail != null)
                 {
+                    _trail.EnsureTopmost();
                     _trail.AddPoint(new Point(newX + CanvasW / 2.0, newY + CanvasH / 2.0));
                 }
                 InvalidateVisual();

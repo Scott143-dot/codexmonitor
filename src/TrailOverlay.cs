@@ -35,13 +35,23 @@ namespace CodexMonitor
     {
         private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
         private const int GWL_EXSTYLE = -20;
+
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_SHOWWINDOW = 0x0040;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
 
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
         public string TrailMode { get; set; }
         public string ColorTheme { get; set; }
@@ -52,6 +62,7 @@ namespace CodexMonitor
         private readonly object _lock = new object();
         private Point? _lastPt;
         private double _accumDist;
+        private IntPtr _hwnd = IntPtr.Zero;
 
         private static readonly SolidColorBrush TransBrush = Brushes.Transparent;
 
@@ -65,10 +76,12 @@ namespace CodexMonitor
             Background = TransBrush;
             ShowInTaskbar = false;
             Topmost = true;
-            Left = 0;
-            Top = 0;
-            Width = SystemParameters.PrimaryScreenWidth;
-            Height = SystemParameters.PrimaryScreenHeight;
+
+            // 覆盖全部显示器区域，防止全屏应用或非主屏下失效
+            Left = SystemParameters.VirtualScreenLeft;
+            Top = SystemParameters.VirtualScreenTop;
+            Width = SystemParameters.VirtualScreenWidth;
+            Height = SystemParameters.VirtualScreenHeight;
 
             CompositionTarget.Rendering += OnHardwareFrameRender;
         }
@@ -76,9 +89,18 @@ namespace CodexMonitor
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
-            var hwnd = new WindowInteropHelper(this).Handle;
-            int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-            SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW);
+            _hwnd = new WindowInteropHelper(this).Handle;
+            int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+            SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+            EnsureTopmost();
+        }
+
+        public void EnsureTopmost()
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
         }
 
         public void AddPoint(Point pt)
