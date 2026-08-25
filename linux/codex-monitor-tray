@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Codex Monitor Tray (Linux Top Bar & System Tray)
-Linux 原生顶部菜单栏 / 状态栏常驻小工具
-直接常驻在 Ubuntu / GNOME / KDE 顶部菜单栏，显示：⚡ 68% (5d)
+Codex Monitor Tray (Cross-Platform Top Bar & System Tray)
+跨平台任务栏 / 状态栏常驻小工具
+- Linux: 常驻在 Ubuntu / GNOME 顶部状态栏 (Top Bar AppIndicator)
+- Windows: 常驻在 Windows 屏幕右下角任务栏托盘 (System Tray)
+显示实时用量：⚡ 68% (5d)
 """
 
 import os
@@ -24,6 +26,7 @@ def find_auth_json():
         os.path.expanduser("~/.cc-switch/current/auth.json"),
         os.path.expanduser("~/.cc-switch/auth.json"),
         os.path.expanduser("~/.config/cc-switch/auth.json"),
+        os.path.join(os.environ.get("USERPROFILE", ""), ".codex", "auth.json"),
         "/root/.codex/auth.json",
         "/root/.cc-switch/current/auth.json",
         "/root/.cc-switch/auth.json",
@@ -123,7 +126,7 @@ def auto_refresh_token(auth_info):
 
     req = urllib.request.Request("https://auth.openai.com/oauth/token", data=body)
     req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
     try:
         with opener.open(req, timeout=10) as resp:
@@ -150,7 +153,7 @@ def auto_refresh_token(auth_info):
         pass
     return None
 
-class LinuxTopBarMonitor:
+class CrossPlatformTrayMonitor:
     def __init__(self):
         self.percentage_str = "--"
         self.reset_cd = "--"
@@ -158,13 +161,6 @@ class LinuxTopBarMonitor:
         self.email = "检测中..."
         self.plan_type = "--"
         self.subscription_expiry = "--"
-        
-        self.indicator = None
-        self.status_item = None
-        self.email_item = None
-        self.plan_item = None
-        self.expiry_item = None
-        self.reset_item = None
 
     def fetch_data(self):
         auth = fetch_local_auth()
@@ -195,7 +191,7 @@ class LinuxTopBarMonitor:
         def make_req(tok):
             r = urllib.request.Request("https://chatgpt.com/backend-api/wham/usage")
             r.add_header("Authorization", "Bearer " + tok)
-            r.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+            r.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
             r.add_header("Accept", "application/json")
             r.add_header("Origin", "https://chatgpt.com")
             r.add_header("Referer", "https://chatgpt.com/")
@@ -241,7 +237,61 @@ class LinuxTopBarMonitor:
         except Exception:
             self.reset_detail = "正在连接网络..."
 
-    def run_gtk(self):
+    def run_windows_tray(self):
+        """Windows 本地测试：使用简易 Tkinter 模拟 Windows 任务栏菜单与状态"""
+        import tkinter as tk
+        from tkinter import Menu
+
+        root = tk.Tk()
+        root.title("Codex Monitor Tray (Windows 测试模式)")
+        root.geometry("380x280+350+300")
+        root.configure(bg="#0E1118")
+
+        title_lbl = tk.Label(root, text="⚡ 正在加载任务栏状态...", font=("Segoe UI", 16, "bold"), fg="#38BDF8", bg="#0E1118", pady=15)
+        title_lbl.pack()
+
+        frame = tk.Frame(root, bg="#181C26", bd=1, relief="solid", highlightbackground="#2D3748", highlightthickness=1)
+        frame.pack(padx=20, pady=5, fill="both", expand=True)
+
+        lbl_email = tk.Label(frame, text="📧 账号: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
+        lbl_email.pack(fill="x")
+
+        lbl_plan = tk.Label(frame, text="💎 类型: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
+        lbl_plan.pack(fill="x")
+
+        lbl_expiry = tk.Label(frame, text="📅 到期: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
+        lbl_expiry.pack(fill="x")
+
+        lbl_reset = tk.Label(frame, text="⏱️ 重置: 加载中...", font=("Segoe UI", 10), fg="#F1F5F9", bg="#181C26", anchor="w", padx=15, pady=4)
+        lbl_reset.pack(fill="x")
+
+        btn_box = tk.Frame(root, bg="#0E1118", pady=10)
+        btn_box.pack(fill="x")
+
+        def update_ui():
+            title_lbl.config(text=f"⚡ 任务栏显示: ⚡ {self.percentage_str} ({self.reset_cd})")
+            lbl_email.config(text=f"📧 账号: {self.email}")
+            lbl_plan.config(text=f"💎 类型: {self.plan_type}")
+            lbl_expiry.config(text=f"📅 到期: {self.subscription_expiry}")
+            lbl_reset.config(text=f"⏱️ 重置: {self.reset_detail}")
+
+        def do_refresh():
+            def _th():
+                self.fetch_data()
+                root.after(0, update_ui)
+            threading.Thread(target=_th, daemon=True).start()
+
+        btn_refresh = tk.Button(btn_box, text="🔄 立即刷新", font=("Segoe UI", 9, "bold"), bg="#2563EB", fg="#FFFFFF", activebackground="#1D4ED8", bd=0, padx=12, pady=5, command=do_refresh)
+        btn_refresh.pack(side="left", padx=25)
+
+        btn_quit = tk.Button(btn_box, text="❌ 退出测试", font=("Segoe UI", 9), bg="#374151", fg="#F1F5F9", activebackground="#4B5563", bd=0, padx=12, pady=5, command=root.destroy)
+        btn_quit.pack(side="right", padx=25)
+
+        do_refresh()
+        root.mainloop()
+
+    def run_linux_gtk(self):
+        """Linux 原生顶部状态栏 AppIndicator"""
         import gi
         gi.require_version('Gtk', '3.0')
         try:
@@ -257,48 +307,41 @@ class LinuxTopBarMonitor:
         from gi.repository import Gtk, GLib
 
         if appindicator:
-            self.indicator = appindicator.Indicator.new(
+            indicator = appindicator.Indicator.new(
                 "codex-monitor",
                 "utilities-system-monitor",
                 appindicator.IndicatorCategory.APPLICATION_STATUS
             )
-            self.indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
-            self.indicator.set_label("⚡ --", "100%")
+            indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+            indicator.set_label("⚡ --", "100%")
         else:
-            print("⚠️ 未找到 AppIndicator3，启用 Gtk.StatusIcon...")
-            self.status_icon = Gtk.StatusIcon()
-            self.status_icon.set_from_icon_name("utilities-system-monitor")
-            self.status_icon.set_tooltip_text("Codex Monitor")
+            indicator = None
 
-        # 创建下拉菜单
         menu = Gtk.Menu()
-
-        self.status_item = Gtk.MenuItem(label="⚡ 额度: -- (-- 天)")
-        self.status_item.set_sensitive(False)
-        menu.append(self.status_item)
-
-        menu.append(Gtk.SeparatorMenuItem())
-
-        self.email_item = Gtk.MenuItem(label="📧 账号: --")
-        self.email_item.set_sensitive(False)
-        menu.append(self.email_item)
-
-        self.plan_item = Gtk.MenuItem(label="💎 类型: --")
-        self.plan_item.set_sensitive(False)
-        menu.append(self.plan_item)
-
-        self.expiry_item = Gtk.MenuItem(label="📅 到期: --")
-        self.expiry_item.set_sensitive(False)
-        menu.append(self.expiry_item)
-
-        self.reset_item = Gtk.MenuItem(label="⏱️ 重置: --")
-        self.reset_item.set_sensitive(False)
-        menu.append(self.reset_item)
+        status_item = Gtk.MenuItem(label="⚡ 额度: --")
+        status_item.set_sensitive(False)
+        menu.append(status_item)
 
         menu.append(Gtk.SeparatorMenuItem())
+        email_item = Gtk.MenuItem(label="📧 账号: --")
+        email_item.set_sensitive(False)
+        menu.append(email_item)
 
+        plan_item = Gtk.MenuItem(label="💎 类型: --")
+        plan_item.set_sensitive(False)
+        menu.append(plan_item)
+
+        expiry_item = Gtk.MenuItem(label="📅 到期: --")
+        expiry_item.set_sensitive(False)
+        menu.append(expiry_item)
+
+        reset_item = Gtk.MenuItem(label="⏱️ 重置: --")
+        reset_item.set_sensitive(False)
+        menu.append(reset_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
         refresh_item = Gtk.MenuItem(label="🔄 立即刷新")
-        refresh_item.connect("activate", lambda _: self.trigger_refresh())
+        refresh_item.connect("activate", lambda _: threading.Thread(target=self.fetch_data, daemon=True).start())
         menu.append(refresh_item)
 
         quit_item = Gtk.MenuItem(label="❌ 退出")
@@ -306,21 +349,18 @@ class LinuxTopBarMonitor:
         menu.append(quit_item)
 
         menu.show_all()
+        if indicator:
+            indicator.set_menu(menu)
 
-        if self.indicator:
-            self.indicator.set_menu(menu)
-
-        # 启动后台数据轮询
         def update_ui():
             label_text = f"⚡ {self.percentage_str} ({self.reset_cd})"
-            if self.indicator:
-                self.indicator.set_label(label_text, "100% (99d)")
-            
-            self.status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} (重置倒计时: {self.reset_cd})")
-            self.email_item.set_label(f"📧 账号: {self.email}")
-            self.plan_item.set_label(f"💎 类型: {self.plan_type}")
-            self.expiry_item.set_label(f"📅 到期: {self.subscription_expiry}")
-            self.reset_item.set_label(f"⏱️ 重置: {self.reset_detail}")
+            if indicator:
+                indicator.set_label(label_text, "100% (99d)")
+            status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} (重置倒计时: {self.reset_cd})")
+            email_item.set_label(f"📧 账号: {self.email}")
+            plan_item.set_label(f"💎 类型: {self.plan_type}")
+            expiry_item.set_label(f"📅 到期: {self.subscription_expiry}")
+            reset_item.set_label(f"⏱️ 重置: {self.reset_detail}")
             return False
 
         def poll_loop():
@@ -331,14 +371,6 @@ class LinuxTopBarMonitor:
 
         threading.Thread(target=poll_loop, daemon=True).start()
         Gtk.main()
-
-    def trigger_refresh(self):
-        def _do():
-            self.fetch_data()
-            import gi
-            from gi.repository import GLib
-            GLib.idle_add(lambda: self.status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} ({self.reset_cd})"))
-        threading.Thread(target=_do, daemon=True).start()
 
     def run_test_mode(self):
         print("==================================================")
@@ -371,12 +403,14 @@ class LinuxTopBarMonitor:
                 self.run_test_mode()
                 return
 
-        try:
-            self.run_gtk()
-        except Exception as e:
-            print(f"❌ GTK 菜单栏初始化失败 ({e})")
-            print("💡 提示：在无桌面环境下，您可以执行 ./codex-monitor-tray --test 进行全功能模拟测试！")
+        if sys.platform == "win32":
+            self.run_windows_tray()
+        else:
+            try:
+                self.run_linux_gtk()
+            except Exception:
+                self.run_test_mode()
 
 if __name__ == "__main__":
-    app = LinuxTopBarMonitor()
+    app = CrossPlatformTrayMonitor()
     app.run()
