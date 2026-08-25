@@ -20,7 +20,6 @@ CANDIDATES=(
 
 for p in "${CANDIDATES[@]}"; do
     if [ -n "$p" ] && [ -f "$p" ]; then
-        # 解析真实物理文件路径 (如果是软链接)
         REAL_P=$(readlink -f "$p" 2>/dev/null || echo "$p")
         if [ -f "$REAL_P" ]; then
             AUTH_PATH="$REAL_P"
@@ -52,16 +51,34 @@ if [ -n "$DETECTED_PROXY" ]; then
     CURL_PROXY_ARG="-x $DETECTED_PROXY"
 fi
 
+DEBUG_MODE=0
+for arg in "$@"; do
+    if [ "$arg" == "--debug" ] || [ "$arg" == "-v" ] || [ "$arg" == "-d" ]; then
+        DEBUG_MODE=1
+    fi
+done
+
 # 自动刷新 Token 函数
 refresh_oauth_token() {
-    if [ -z "$REFRESH_TOKEN" ]; then return 1; fi
+    if [ -z "$REFRESH_TOKEN" ]; then
+        [ $DEBUG_MODE -eq 1 ] && echo "🔍 [DEBUG] 没有找到 refresh_token，跳过自动续期"
+        return 1
+    fi
     REF_BODY="{\"client_id\":\"app_EMoamEEZ73f0CkXaXp7hrann\",\"grant_type\":\"refresh_token\",\"refresh_token\":\"$REFRESH_TOKEN\"}"
-    REF_RESP=$(curl -s --max-time 10 $CURL_PROXY_ARG -H "Content-Type: application/json" -d "$REF_BODY" "https://auth.openai.com/oauth/token" 2>/dev/null)
+    
+    REF_RESP=$(curl -s --max-time 10 $CURL_PROXY_ARG \
+      -H "Content-Type: application/json" \
+      -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64)" \
+      -d "$REF_BODY" \
+      "https://auth.openai.com/oauth/token" 2>&1)
+
+    if [ $DEBUG_MODE -eq 1 ]; then
+        echo "🔍 [DEBUG] auth.openai.com 刷新接口响应: $REF_RESP"
+    fi
+
     NEW_TOK=$(echo "$REF_RESP" | grep -o '"access_token": *"[^"]*"' | head -n1 | cut -d'"' -f4)
     if [ -n "$NEW_TOK" ]; then
         ACCESS_TOKEN="$NEW_TOK"
-        # 覆写回 auth.json
-        sed -i "s/\"access_token\": *\"[^\"]*\"/\"access_token\": \"$NEW_TOK\"/g" "$AUTH_PATH" 2>/dev/null
         return 0
     fi
     return 1
@@ -91,13 +108,6 @@ fi
 EXPIRY=$(echo "$JWT_JSON" | grep -o '"chatgpt_subscription_active_until": *"[^"]*"' | head -n1 | cut -d'"' -f4 | cut -dT -f1)
 [ -z "$EXPIRY" ] && EXPIRY="--"
 
-DEBUG_MODE=0
-for arg in "$@"; do
-    if [ "$arg" == "--debug" ] || [ "$arg" == "-v" ] || [ "$arg" == "-d" ]; then
-        DEBUG_MODE=1
-    fi
-done
-
 if [ $DEBUG_MODE -eq 1 ]; then
     echo "=================================================="
     echo "🔍 [DEBUG] Codex Monitor 全链路诊断"
@@ -114,7 +124,7 @@ if [ $DEBUG_MODE -eq 1 ]; then
     done
     echo "🔍 [DEBUG] 最终选定凭据文件: $AUTH_PATH"
     echo "🔍 [DEBUG] Access Token 前缀: ${ACCESS_TOKEN:0:15}..."
-    echo "🔍 [DEBUG] Refresh Token 存在: $([ -n "$REFRESH_TOKEN" ] && echo "是" || echo "否")"
+    echo "🔍 [DEBUG] Refresh Token 前缀: ${REFRESH_TOKEN:0:15}..."
     echo "🔍 [DEBUG] 使用代理: ${CURL_PROXY_ARG:-无 (直连)}"
 fi
 
@@ -141,29 +151,24 @@ RESP_BODY=$(echo "$RAW_RESP" | awk 'BEGIN{RS="\r\n\r\n|\n\n"}{if(NR>1)print}')
 [ -z "$RESP_BODY" ] && RESP_BODY="$RAW_RESP"
 
 if [ $DEBUG_MODE -eq 1 ]; then
-    echo "🔍 [DEBUG] 2. 官方 API 请求状态码: $HTTP_CODE"
-    echo "🔍 [DEBUG] 3. 官方 API 响应内容: $RESP_BODY"
+    echo "🔍 [DEBUG] 2. 官方 API 响应 HTTP Code: $HTTP_CODE"
+    echo "🔍 [DEBUG] 3. 响应体: $RESP_BODY"
 fi
 
 # 如果 401 或 token 过期，尝试自动刷新
 if [ "$HTTP_CODE" == "401" ] || echo "$RESP_BODY" | grep -q "token_expired"; then
     if [ $DEBUG_MODE -eq 1 ]; then
-        echo "🔍 [DEBUG] 4. Token 失效，正在尝试向 https://auth.openai.com/oauth/token 自动刷新续期..."
+        echo "🔍 [DEBUG] 4. 检测到 Token 失效，正在调用 refresh_oauth_token()..."
     fi
     if refresh_oauth_token; then
         if [ $DEBUG_MODE -eq 1 ]; then
             echo "🔍 [DEBUG] 5. Token 刷新成功！新 Token 前缀: ${ACCESS_TOKEN:0:15}..."
         fi
         RAW_RESP=$(do_fetch)
-        HTTP_CODE=$(echo "$RAW_RESP" | grep -o 'HTTP/[0-9.]* [0-9]*' | head -n1 | cut -d' ' -f2)
         RESP_BODY=$(echo "$RAW_RESP" | awk 'BEGIN{RS="\r\n\r\n|\n\n"}{if(NR>1)print}')
         [ -z "$RESP_BODY" ] && RESP_BODY="$RAW_RESP"
         if [ $DEBUG_MODE -eq 1 ]; then
             echo "🔍 [DEBUG] 6. 续期后重试响应: $RESP_BODY"
-        fi
-    else
-        if [ $DEBUG_MODE -eq 1 ]; then
-            echo "🔍 [DEBUG] 5. Token 续期失败 (请确认是否有 refresh_token 或网络代理可访问 auth.openai.com)"
         fi
     fi
 fi
@@ -174,8 +179,8 @@ RESET_SEC=$(echo "$RESP_BODY" | grep -o '"reset_after_seconds": *[0-9]*' | head 
 REMAINING_PCT="--"
 RESET_CD="--"
 
-if echo "$RESP" | grep -q "token_expired"; then
-    RESET_DT="Token 续期失败 (请在宿主机登录刷新)"
+if echo "$RESP_BODY" | grep -q "token_expired"; then
+    RESET_DT="Token 续期中 (请在容器内运行 ./codex-monitor)"
 elif [ -n "$USED_PCT" ]; then
     REMAINING_PCT=$((100 - USED_PCT))
     [ $REMAINING_PCT -lt 0 ] && REMAINING_PCT=0
@@ -201,7 +206,6 @@ if [ -n "$RESET_SEC" ]; then
     fi
 fi
 
-# 5. 渲染进度条 (兼顾 UTF-8 与 Docker ASCII 终端)
 TOTAL=20
 if [ "$REMAINING_PCT" != "--" ]; then
     FILLED=$(( (REMAINING_PCT * TOTAL) / 100 ))
