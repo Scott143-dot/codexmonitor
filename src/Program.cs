@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 
@@ -6,6 +7,32 @@ namespace CodexMonitor
 {
     public static class Program
     {
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+        [DllImport("shcore.dll")]
+        private static extern int SetProcessDpiAwareness(int awareness);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
+        private static void EnableDpiAwareness()
+        {
+            try
+            {
+                // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+                if (!SetProcessDpiAwarenessContext(new IntPtr(-4)))
+                {
+                    // PROCESS_PER_MONITOR_DPI_AWARE = 2
+                    SetProcessDpiAwareness(2);
+                }
+            }
+            catch
+            {
+                try { SetProcessDPIAware(); } catch { }
+            }
+        }
+
         private static Mutex _mutex;
 
         [STAThread]
@@ -13,6 +40,8 @@ namespace CodexMonitor
         {
             try
             {
+                EnableDpiAwareness();
+
                 // 使用 Local 互斥体，彻底杜绝 Global 前缀在受限普通用户权限下的 UnauthorizedAccessException
                 bool createdNew;
                 _mutex = new Mutex(true, "Local\\CodexMonitor_SingleInstance_Mutex_WPF", out createdNew);

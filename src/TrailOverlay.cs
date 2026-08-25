@@ -66,6 +66,8 @@ namespace CodexMonitor
 
         private static readonly SolidColorBrush TransBrush = Brushes.Transparent;
 
+        private bool _isRenderingActive = false;
+
         public TrailOverlay()
         {
             TrailMode = "laser";
@@ -77,13 +79,33 @@ namespace CodexMonitor
             ShowInTaskbar = false;
             Topmost = true;
 
-            // 覆盖全部显示器区域，防止全屏应用或非主屏下失效
-            Left = SystemParameters.VirtualScreenLeft;
-            Top = SystemParameters.VirtualScreenTop;
-            Width = SystemParameters.VirtualScreenWidth;
-            Height = SystemParameters.VirtualScreenHeight;
+            UpdateBounds();
+        }
 
-            CompositionTarget.Rendering += OnHardwareFrameRender;
+        public void UpdateBounds()
+        {
+            double vLeft = SystemParameters.VirtualScreenLeft;
+            double vTop = SystemParameters.VirtualScreenTop;
+            double vWidth = SystemParameters.VirtualScreenWidth;
+            double vHeight = SystemParameters.VirtualScreenHeight;
+
+            if (Math.Abs(Left - vLeft) > 0.5 || Math.Abs(Top - vTop) > 0.5 ||
+                Math.Abs(Width - vWidth) > 0.5 || Math.Abs(Height - vHeight) > 0.5)
+            {
+                Left = vLeft;
+                Top = vTop;
+                Width = vWidth;
+                Height = vHeight;
+            }
+        }
+
+        private void EnsureRenderingActive()
+        {
+            if (!_isRenderingActive)
+            {
+                _isRenderingActive = true;
+                CompositionTarget.Rendering += OnHardwareFrameRender;
+            }
         }
 
         protected override void OnSourceInitialized(EventArgs e)
@@ -103,11 +125,16 @@ namespace CodexMonitor
             }
         }
 
-        public void AddPoint(Point pt)
+        public void AddPoint(Point screenPt)
         {
+            UpdateBounds();
+            // 将虚拟屏幕全局坐标精准映射至 TrailOverlay 的局部绘图坐标系 (解决多屏/负坐标偏移)
+            Point pt = new Point(screenPt.X - Left, screenPt.Y - Top);
+
             lock (_lock)
             {
                 var now = DateTime.Now;
+                EnsureRenderingActive();
 
                 if (!_lastPt.HasValue)
                 {
@@ -121,8 +148,7 @@ namespace CodexMonitor
                 if (dist < 1.0) return;
 
                 _accumDist += dist;
-                // 彻底锁定闪电的 Segment 架构：闪电 16px，水墨 9px，极光 10px (高密且绝对不卡)
-                double triggerDist = (TrailMode == "laser") ? 16.0 : ((TrailMode == "comet") ? 9.0 : 10.0);
+                double triggerDist = (TrailMode == "laser") ? 16.0 : ((TrailMode == "comet") ? 11.0 : 12.0);
 
                 if (_accumDist >= triggerDist)
                 {
@@ -130,36 +156,46 @@ namespace CodexMonitor
                     double nx = -dY / dist;
                     double ny = dX / dist;
 
+                    // 容量限制，快速移动时剔除过旧片段，杜绝低性能机器排队积压卡顿
+                    if (_segments.Count > 25)
+                    {
+                        _segments.RemoveRange(0, _segments.Count - 20);
+                    }
+                    if (_particles.Count > 20)
+                    {
+                        _particles.RemoveRange(0, _particles.Count - 15);
+                    }
+
                     if (TrailMode == "laser")
                     {
-                        var mainPts = GenerateFractalPath(_lastPt.Value, pt, 3, 14.0);
+                        var mainPts = GenerateFractalPath(_lastPt.Value, pt, 2, 12.0);
                         _segments.Add(new RibbonSegment
                         {
                             P1 = _lastPt.Value,
                             P2 = pt,
                             MainLine = mainPts,
                             CreatedT = now,
-                            Life = 0.8,
+                            Life = 0.65,
                             IsMain = true
                         });
 
                         double sign = _rand.Next(2) == 0 ? 1.0 : -1.0;
-                        var pSub1 = new Point(_lastPt.Value.X + nx * sign * 6.0, _lastPt.Value.Y + ny * sign * 6.0);
-                        var pSub2 = new Point(pt.X + nx * sign * 10.0, pt.Y + ny * sign * 10.0);
-                        var subPts = GenerateFractalPath(pSub1, pSub2, 2, 16.0);
+                        var pSub1 = new Point(_lastPt.Value.X + nx * sign * 5.0, _lastPt.Value.Y + ny * sign * 5.0);
+                        var pSub2 = new Point(pt.X + nx * sign * 8.0, pt.Y + ny * sign * 8.0);
+                        var subPts = GenerateFractalPath(pSub1, pSub2, 2, 12.0);
                         _segments.Add(new RibbonSegment
                         {
                             P1 = pSub1,
                             P2 = pSub2,
                             MainLine = subPts,
                             CreatedT = now,
-                            Life = 0.6,
+                            Life = 0.5,
                             IsMain = false
                         });
 
-                        for (int i = 0; i < 3; i++)
+                        for (int i = 0; i < 2; i++)
                         {
-                            double spd = _rand.NextDouble() * 2.5 + 1.2;
+                            double spd = _rand.NextDouble() * 2.2 + 1.0;
                             double ang = _rand.NextDouble() * Math.PI * 2;
                             _particles.Add(new VisualParticle
                             {
@@ -167,27 +203,25 @@ namespace CodexMonitor
                                 Y = pt.Y,
                                 Vx = Math.Cos(ang) * spd,
                                 Vy = Math.Sin(ang) * spd,
-                                Life = _rand.NextDouble() * 0.35 + 0.25,
+                                Life = _rand.NextDouble() * 0.3 + 0.2,
                                 Born = now,
-                                Size = _rand.NextDouble() * 1.8 + 1.2,
+                                Size = _rand.NextDouble() * 1.6 + 1.0,
                                 ParticleColor = Color.FromRgb(56, 189, 248)
                             });
                         }
                     }
                     else if (TrailMode == "comet")
                     {
-                        // 🖌️ 水墨烟云：彻底消灭平行线！采用流体交织穿插丝缕 + 烟雾晕染
                         var swirlingLines = new List<List<Point>>();
-                        int numStrands = 7; // 7 束相互交织缠绕的墨丝
+                        int numStrands = 5; // 5 束高质量交织缠绕墨丝 (性能与美观最佳平衡)
 
                         for (int s = 0; s < numStrands; s++)
                         {
-                            // 随机与正弦混合交织偏置，绝不产生平行线
-                            double offset1 = (_rand.NextDouble() * 22.0 - 11.0);
-                            double offset2 = (_rand.NextDouble() * 22.0 - 11.0);
+                            double offset1 = (_rand.NextDouble() * 20.0 - 10.0);
+                            double offset2 = (_rand.NextDouble() * 20.0 - 10.0);
                             var p1 = new Point(_lastPt.Value.X + nx * offset1, _lastPt.Value.Y + ny * offset1);
                             var p2 = new Point(pt.X + nx * offset2, pt.Y + ny * offset2);
-                            swirlingLines.Add(GenerateFractalPath(p1, p2, 2, 6.0));
+                            swirlingLines.Add(GenerateFractalPath(p1, p2, 2, 5.0));
                         }
 
                         _segments.Add(new RibbonSegment
@@ -199,20 +233,20 @@ namespace CodexMonitor
                             Dist = dist,
                             TendrilLines = swirlingLines,
                             CreatedT = now,
-                            Life = 0.95, // 0.95 秒独立淡出
+                            Life = 0.75,
                             IsMain = true
                         });
                     }
                     else // rainbow
                     {
                         var ribbons = new List<List<Point>>();
-                        for (int c = 0; c < 6; c++)
+                        for (int c = 0; c < 5; c++)
                         {
-                            double o1 = (_rand.NextDouble() * 26.0 - 13.0);
-                            double o2 = (_rand.NextDouble() * 26.0 - 13.0);
+                            double o1 = (_rand.NextDouble() * 22.0 - 11.0);
+                            double o2 = (_rand.NextDouble() * 22.0 - 11.0);
                             var p1 = new Point(_lastPt.Value.X + nx * o1, _lastPt.Value.Y + ny * o1);
                             var p2 = new Point(pt.X + nx * o2, pt.Y + ny * o2);
-                            ribbons.Add(GenerateFractalPath(p1, p2, 2, 7.0));
+                            ribbons.Add(GenerateFractalPath(p1, p2, 2, 6.0));
                         }
 
                         _segments.Add(new RibbonSegment
@@ -221,26 +255,23 @@ namespace CodexMonitor
                             P2 = pt,
                             TendrilLines = ribbons,
                             CreatedT = now,
-                            Life = 0.9,
+                            Life = 0.75,
                             IsMain = true
                         });
 
-                        for (int i = 0; i < 2; i++)
+                        double spd = _rand.NextDouble() * 1.6 + 0.5;
+                        double ang = _rand.NextDouble() * Math.PI * 2;
+                        _particles.Add(new VisualParticle
                         {
-                            double spd = _rand.NextDouble() * 1.8 + 0.5;
-                            double ang = _rand.NextDouble() * Math.PI * 2;
-                            _particles.Add(new VisualParticle
-                            {
-                                X = pt.X + nx * (_rand.NextDouble() * 18.0 - 9.0),
-                                Y = pt.Y + ny * (_rand.NextDouble() * 18.0 - 9.0),
-                                Vx = Math.Cos(ang) * spd,
-                                Vy = Math.Sin(ang) * spd,
-                                Life = _rand.NextDouble() * 0.45 + 0.25,
-                                Born = now,
-                                Size = _rand.NextDouble() * 2.0 + 0.8,
-                                ParticleColor = Color.FromRgb(250, 204, 21)
-                            });
-                        }
+                            X = pt.X + nx * (_rand.NextDouble() * 16.0 - 8.0),
+                            Y = pt.Y + ny * (_rand.NextDouble() * 16.0 - 8.0),
+                            Vx = Math.Cos(ang) * spd,
+                            Vy = Math.Sin(ang) * spd,
+                            Life = _rand.NextDouble() * 0.35 + 0.2,
+                            Born = now,
+                            Size = _rand.NextDouble() * 1.8 + 0.8,
+                            ParticleColor = Color.FromRgb(250, 204, 21)
+                        });
                     }
 
                     _lastPt = pt;
@@ -292,6 +323,7 @@ namespace CodexMonitor
 
         private void OnHardwareFrameRender(object sender, EventArgs e)
         {
+            bool hasActiveVisuals = false;
             lock (_lock)
             {
                 var now = DateTime.Now;
@@ -308,9 +340,17 @@ namespace CodexMonitor
                     {
                         spk.X += spk.Vx;
                         spk.Y += spk.Vy;
-                        spk.Vx *= 0.94;
-                        spk.Vy *= 0.94;
+                        spk.Vx *= 0.92;
+                        spk.Vy *= 0.92;
                     }
+                }
+
+                hasActiveVisuals = (_segments.Count > 0 || _particles.Count > 0);
+                if (!hasActiveVisuals)
+                {
+                    // 彻底停用每帧监听，空闲期 0% CPU / 0% GPU
+                    _isRenderingActive = false;
+                    CompositionTarget.Rendering -= OnHardwareFrameRender;
                 }
             }
             InvalidateVisual();

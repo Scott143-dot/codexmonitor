@@ -91,16 +91,21 @@ namespace CodexMonitor
             Width = CanvasW;
             Height = CanvasH;
 
-            var scr = SystemParameters.WorkArea;
+            double vLeft = SystemParameters.VirtualScreenLeft;
+            double vTop = SystemParameters.VirtualScreenTop;
+            double vRight = vLeft + SystemParameters.VirtualScreenWidth;
+            double vBottom = vTop + SystemParameters.VirtualScreenHeight;
+
             double posX = _config.pos_x;
             double posY = _config.pos_y;
-            if (posX < scr.Left || posX > (scr.Right - Width)) posX = scr.Left + 120;
-            if (posY < scr.Top || posY > (scr.Bottom - Height)) posY = scr.Top + 120;
+            if (posX < vLeft || posX > (vRight - Width)) posX = SystemParameters.WorkArea.Left + 120;
+            if (posY < vTop || posY > (vBottom - Height)) posY = SystemParameters.WorkArea.Top + 120;
             Left = posX;
             Top = posY;
 
             if (_isDocked)
             {
+                var scr = GetCurrentScreenBounds(Left, Top);
                 if (Left <= scr.Left + 60) { _dockSide = "left"; Left = scr.Left; }
                 else if (Left + Width >= scr.Right - 60) { _dockSide = "right"; Left = scr.Right - CanvasW; }
                 else { _dockSide = "left"; Left = scr.Left; }
@@ -232,10 +237,10 @@ namespace CodexMonitor
             }
 
             var mousePt = GetLogicalCursorPos();
-            var scr = SystemParameters.WorkArea;
 
             if (_isDocked)
             {
+                var scr = GetCurrentScreenBounds(Left, Top);
                 if (Left <= scr.Left + 60) _dockSide = "left";
                 else if (Left + Width >= scr.Right - 60) _dockSide = "right";
                 else _dockSide = "left";
@@ -266,8 +271,8 @@ namespace CodexMonitor
             Rect enterBox = new Rect(currentEntityBounds.Left - 3, currentEntityBounds.Top - 3, currentEntityBounds.Width + 6, currentEntityBounds.Height + 6);
 
             Rect leaveBox = _dockSide == "left"
-                ? new Rect(scr.Left, Top, RingW + 18, Math.Max(RingH, DockH))
-                : new Rect(scr.Right - RingW - 18, Top, RingW + 18, Math.Max(RingH, DockH));
+                ? new Rect(Left, Top, RingW + 18, Math.Max(RingH, DockH))
+                : new Rect(Left + Width - RingW - 18, Top, RingW + 18, Math.Max(RingH, DockH));
 
             if (!_hovered)
             {
@@ -324,6 +329,36 @@ namespace CodexMonitor
             return new Rect(Left + localX, Top + localY, curW, curH);
         }
 
+        private Rect GetCurrentScreenBounds(double x, double y)
+        {
+            try
+            {
+                var source = PresentationSource.FromVisual(this);
+                Point devPoint = new Point(x + CanvasW / 2.0, y + CanvasH / 2.0);
+                if (source != null && source.CompositionTarget != null)
+                {
+                    devPoint = source.CompositionTarget.TransformToDevice.Transform(devPoint);
+                }
+
+                var point = new System.Drawing.Point((int)devPoint.X, (int)devPoint.Y);
+                var screen = System.Windows.Forms.Screen.FromPoint(point);
+                if (screen != null)
+                {
+                    var wa = screen.WorkingArea;
+                    if (source != null && source.CompositionTarget != null)
+                    {
+                        var fromDev = source.CompositionTarget.TransformFromDevice;
+                        Point p1 = fromDev.Transform(new Point(wa.Left, wa.Top));
+                        Point p2 = fromDev.Transform(new Point(wa.Right, wa.Bottom));
+                        return new Rect(p1.X, p1.Y, Math.Max(100.0, p2.X - p1.X), Math.Max(100.0, p2.Y - p1.Y));
+                    }
+                    return new Rect(wa.Left, wa.Top, wa.Width, wa.Height);
+                }
+            }
+            catch { }
+            return new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+        }
+
         private Point GetLogicalCursorPos()
         {
             POINT pt;
@@ -361,9 +396,13 @@ namespace CodexMonitor
                 double newX = curScreenPos.X - _dragStartOffset.X;
                 double newY = curScreenPos.Y - _dragStartOffset.Y;
 
-                var scr = SystemParameters.WorkArea;
-                newX = Math.Max(scr.Left, Math.Min(scr.Right - Width, newX));
-                newY = Math.Max(scr.Top, Math.Min(scr.Bottom - Height, newY));
+                double vLeft = SystemParameters.VirtualScreenLeft;
+                double vTop = SystemParameters.VirtualScreenTop;
+                double vRight = vLeft + SystemParameters.VirtualScreenWidth;
+                double vBottom = vTop + SystemParameters.VirtualScreenHeight;
+
+                newX = Math.Max(vLeft, Math.Min(vRight - Width, newX));
+                newY = Math.Max(vTop, Math.Min(vBottom - Height, newY));
 
                 if (_isDocked)
                 {
@@ -393,7 +432,7 @@ namespace CodexMonitor
                 ReleaseMouseCapture();
                 if (_trail != null) _trail.ResetLastPoint();
 
-                var scr = SystemParameters.WorkArea;
+                var scr = GetCurrentScreenBounds(Left, Top);
                 double snapMargin = 40.0;
 
                 if (Left <= scr.Left + snapMargin)
@@ -565,7 +604,7 @@ namespace CodexMonitor
                 Placement = PlacementMode.Relative
             };
 
-            var scr = SystemParameters.WorkArea;
+            var scr = GetCurrentScreenBounds(Left, Top);
             if (Left + Width + 160 > scr.Right)
             {
                 _currentMenu.HorizontalOffset = -150.0;
