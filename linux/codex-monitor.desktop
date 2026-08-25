@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=Codex Monitor
-Comment=OpenAI Codex / ChatGPT Quota Floating Monitor
-Exec=python3 -c "import os, sys; os.system('python3 ' + os.path.expanduser('~/.local/share/codex-monitor/codex_monitor_gui.py'))"
-Icon=utilities-system-monitor
-Terminal=false
-Type=Application
-Categories=Utility;Development;
-StartupNotify=true

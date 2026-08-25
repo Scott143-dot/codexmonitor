@@ -1,4 +1,9 @@
-# Build output and temporary files
+# Binaries & Executables (Built via GitHub Actions CI/CD)
+*.exe
+*.dll
+*.so
+*.dylib
+*.bin
 *.obj
 *.pdb
 *.tmp
