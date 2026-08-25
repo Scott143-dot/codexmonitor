@@ -51,13 +51,26 @@ fi
 EXPIRY=$(echo "$JWT_JSON" | grep -o '"chatgpt_subscription_active_until": *"[^"]*"' | head -n1 | cut -d'"' -f4 | cut -dT -f1)
 [ -z "$EXPIRY" ] && EXPIRY="--"
 
-# 4. 请求 OpenAI 用量 API
+# 4. 智能自愈探测代理配置 (兼容 https_proxy, HTTP_PROXY, proxy_https 等各种拼写)
+CURL_PROXY_ARG=""
+DETECTED_PROXY="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-${all_proxy:-${ALL_PROXY:-${proxy_https:-${proxy_http}}}}}}}}"
+
+if [ -n "$DETECTED_PROXY" ]; then
+    # 自动补全 http:// 前缀
+    case "$DETECTED_PROXY" in
+        http://*|https://*|socks5://*) ;;
+        *) DETECTED_PROXY="http://$DETECTED_PROXY" ;;
+    esac
+    CURL_PROXY_ARG="-x $DETECTED_PROXY"
+fi
+
 HEADER_ACC=""
 if [ -n "$ACCOUNT_ID" ]; then
     HEADER_ACC="-H \"chatgpt-account-id: $ACCOUNT_ID\""
 fi
 
-RESP=$(curl -s --max-time 8 \
+RESP=$(curl -s --max-time 10 \
+  $CURL_PROXY_ARG \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Origin: https://chatgpt.com" \
   -H "Referer: https://chatgpt.com/" \
