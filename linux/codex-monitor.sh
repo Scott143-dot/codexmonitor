@@ -91,13 +91,40 @@ fi
 EXPIRY=$(echo "$JWT_JSON" | grep -o '"chatgpt_subscription_active_until": *"[^"]*"' | head -n1 | cut -d'"' -f4 | cut -dT -f1)
 [ -z "$EXPIRY" ] && EXPIRY="--"
 
+DEBUG_MODE=0
+for arg in "$@"; do
+    if [ "$arg" == "--debug" ] || [ "$arg" == "-v" ] || [ "$arg" == "-d" ]; then
+        DEBUG_MODE=1
+    fi
+done
+
+if [ $DEBUG_MODE -eq 1 ]; then
+    echo "=================================================="
+    echo "🔍 [DEBUG] Codex Monitor 全链路诊断"
+    echo "=================================================="
+    echo "🔍 [DEBUG] 1. 扫描候选凭据路径:"
+    for p in "${CANDIDATES[@]}"; do
+        if [ -n "$p" ]; then
+            if [ -f "$p" ]; then
+                echo "   -> [存在] $p (真实路径: $(readlink -f "$p" 2>/dev/null || echo "$p"))"
+            else
+                echo "   -> [不存在] $p"
+            fi
+        fi
+    done
+    echo "🔍 [DEBUG] 最终选定凭据文件: $AUTH_PATH"
+    echo "🔍 [DEBUG] Access Token 前缀: ${ACCESS_TOKEN:0:15}..."
+    echo "🔍 [DEBUG] Refresh Token 存在: $([ -n "$REFRESH_TOKEN" ] && echo "是" || echo "否")"
+    echo "🔍 [DEBUG] 使用代理: ${CURL_PROXY_ARG:-无 (直连)}"
+fi
+
 HEADER_ACC=""
 if [ -n "$ACCOUNT_ID" ]; then
     HEADER_ACC="-H \"chatgpt-account-id: $ACCOUNT_ID\""
 fi
 
 do_fetch() {
-    curl -s --max-time 10 \
+    curl -s -i --max-time 10 \
       $CURL_PROXY_ARG \
       -H "Authorization: Bearer $ACCESS_TOKEN" \
       -H "Origin: https://chatgpt.com" \
@@ -105,20 +132,44 @@ do_fetch() {
       -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64)" \
       -H "Accept: application/json" \
       $HEADER_ACC \
-      "https://chatgpt.com/backend-api/wham/usage" 2>/dev/null
+      "https://chatgpt.com/backend-api/wham/usage" 2>&1
 }
 
-RESP=$(do_fetch)
+RAW_RESP=$(do_fetch)
+HTTP_CODE=$(echo "$RAW_RESP" | grep -o 'HTTP/[0-9.]* [0-9]*' | head -n1 | cut -d' ' -f2)
+RESP_BODY=$(echo "$RAW_RESP" | awk 'BEGIN{RS="\r\n\r\n|\n\n"}{if(NR>1)print}')
+[ -z "$RESP_BODY" ] && RESP_BODY="$RAW_RESP"
 
-# 如果 token 过期，自动刷新并重试！
-if echo "$RESP" | grep -q "token_expired" || echo "$RESP" | grep -q "401"; then
+if [ $DEBUG_MODE -eq 1 ]; then
+    echo "🔍 [DEBUG] 2. 官方 API 请求状态码: $HTTP_CODE"
+    echo "🔍 [DEBUG] 3. 官方 API 响应内容: $RESP_BODY"
+fi
+
+# 如果 401 或 token 过期，尝试自动刷新
+if [ "$HTTP_CODE" == "401" ] || echo "$RESP_BODY" | grep -q "token_expired"; then
+    if [ $DEBUG_MODE -eq 1 ]; then
+        echo "🔍 [DEBUG] 4. Token 失效，正在尝试向 https://auth.openai.com/oauth/token 自动刷新续期..."
+    fi
     if refresh_oauth_token; then
-        RESP=$(do_fetch)
+        if [ $DEBUG_MODE -eq 1 ]; then
+            echo "🔍 [DEBUG] 5. Token 刷新成功！新 Token 前缀: ${ACCESS_TOKEN:0:15}..."
+        fi
+        RAW_RESP=$(do_fetch)
+        HTTP_CODE=$(echo "$RAW_RESP" | grep -o 'HTTP/[0-9.]* [0-9]*' | head -n1 | cut -d' ' -f2)
+        RESP_BODY=$(echo "$RAW_RESP" | awk 'BEGIN{RS="\r\n\r\n|\n\n"}{if(NR>1)print}')
+        [ -z "$RESP_BODY" ] && RESP_BODY="$RAW_RESP"
+        if [ $DEBUG_MODE -eq 1 ]; then
+            echo "🔍 [DEBUG] 6. 续期后重试响应: $RESP_BODY"
+        fi
+    else
+        if [ $DEBUG_MODE -eq 1 ]; then
+            echo "🔍 [DEBUG] 5. Token 续期失败 (请确认是否有 refresh_token 或网络代理可访问 auth.openai.com)"
+        fi
     fi
 fi
 
-USED_PCT=$(echo "$RESP" | grep -o '"used_percent": *[0-9.]*' | head -n1 | grep -o '[0-9.]*' | cut -d'.' -f1)
-RESET_SEC=$(echo "$RESP" | grep -o '"reset_after_seconds": *[0-9]*' | head -n1 | grep -o '[0-9]*')
+USED_PCT=$(echo "$RESP_BODY" | grep -o '"used_percent": *[0-9.]*' | head -n1 | grep -o '[0-9.]*' | cut -d'.' -f1)
+RESET_SEC=$(echo "$RESP_BODY" | grep -o '"reset_after_seconds": *[0-9]*' | head -n1 | grep -o '[0-9]*')
 
 REMAINING_PCT="--"
 RESET_CD="--"
