@@ -328,30 +328,89 @@ func generateTrayIcon(pct float64) []byte {
 	const size = 64
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
 
-	// 绘制深色发光底
+	// 透明背景
 	draw.Draw(img, img.Bounds(), &image.Uniform{color.Transparent}, image.Point{}, draw.Src)
-	for y := 4; y < size-4; y++ {
-		for x := 4; x < size-4; x++ {
-			dx := float64(x - size/2)
-			dy := float64(y - size/2)
-			r := dx*dx + dy*dy
-			if r <= 28*28 && r >= 20*20 {
-				img.Set(x, y, color.RGBA{18, 20, 28, 255})
+
+	// 1. 绘制深灰底环 (半径 28, 粗度 5)
+	cx, cy := 32.0, 32.0
+	rOuter := 30.0
+	rInner := 23.0
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx := float64(x) - cx
+			dy := float64(y) - cy
+			dist := dx*dx + dy*dy
+			if dist <= rOuter*rOuter && dist >= rInner*rInner {
+				img.Set(x, y, color.RGBA{30, 35, 48, 255})
 			}
 		}
 	}
 
-	// 绘制进度弧圈
-	arcLimit := int((pct / 100.0) * float64(size-16))
-	for x := 8; x < 8+arcLimit; x++ {
-		img.Set(x, size-8, color.RGBA{56, 189, 248, 255})
-		img.Set(x, size-7, color.RGBA{56, 189, 248, 255})
-		img.Set(x, size-6, color.RGBA{56, 189, 248, 255})
+	// 2. 绘制青蓝进度环 (按百分比角度填充)
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx := float64(x) - cx
+			dy := float64(y) - cy
+			dist := dx*dx + dy*dy
+			if dist <= rOuter*rOuter && dist >= rInner*rInner {
+				img.Set(x, y, color.RGBA{56, 189, 248, 255})
+			}
+		}
 	}
+
+	// 3. 在中央绘制高对比度的大号白色数字矩阵
+	txt := fmt.Sprintf("%d", int(pct))
+	// 5x7 像素点阵字体绘制大号数字
+	drawDigits(img, txt, int(cx), int(cy))
 
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
+}
+
+// 纯 Go 自带 5x7 大号点阵字体渲染
+var font5x7 = map[rune][]string{
+	'0': {"1111", "1001", "1001", "1001", "1001", "1001", "1111"},
+	'1': {"0010", "0110", "0010", "0010", "0010", "0010", "0111"},
+	'2': {"1111", "0001", "0001", "1111", "1000", "1000", "1111"},
+	'3': {"1111", "0001", "0001", "1111", "0001", "0001", "1111"},
+	'4': {"1001", "1001", "1001", "1111", "0001", "0001", "0001"},
+	'5': {"1111", "1000", "1000", "1111", "0001", "0001", "1111"},
+	'6': {"1111", "1000", "1000", "1111", "1001", "1001", "1111"},
+	'7': {"1111", "0001", "0001", "0010", "0100", "0100", "0100"},
+	'8': {"1111", "1001", "1001", "1111", "1001", "1001", "1111"},
+	'9': {"1111", "1001", "1001", "1111", "0001", "0001", "1111"},
+	'%': {"1001", "1010", "0100", "0100", "0010", "1001", "1001"},
+}
+
+func drawDigits(img *image.RGBA, s string, centerX, centerY int) {
+	scale := 2 // 放大2倍
+	charW := 4 * scale
+	charH := 7 * scale
+	spacing := 2 * scale
+	totalW := len(s)*charW + (len(s)-1)*spacing
+	startX := centerX - totalW/2
+	startY := centerY - charH/2
+
+	cWhite := color.RGBA{255, 255, 255, 255}
+
+	curX := startX
+	for _, ch := range s {
+		if matrix, ok := font5x7[ch]; ok {
+			for rowIdx, rowStr := range matrix {
+				for colIdx, colChar := range rowStr {
+					if colChar == '1' {
+						for dy := 0; dy < scale; dy++ {
+							for dx := 0; dx < scale; dx++ {
+								img.Set(curX+colIdx*scale+dx, startY+rowIdx*scale+dy, cWhite)
+							}
+						}
+					}
+				}
+			}
+		}
+		curX += charW + spacing
+	}
 }
 
 func onReady() {
