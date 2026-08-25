@@ -1,7 +1,7 @@
 # Codex Monitor
 
 > A lightweight desktop & CLI monitor for OpenAI Codex / ChatGPT Plus & Pro quota tracking.  
-> 极轻量 (~40 KB) 的 OpenAI Codex / ChatGPT Plus & Pro 桌面与终端用量监控悬浮标。
+> 极轻量 (~40 KB) 的 OpenAI Codex / ChatGPT Plus & Pro 桌面与终端用量监控小工具。
 
 <p align="center">
   <img src="assets/preview.png" alt="Codex Monitor Preview" width="280">
@@ -15,15 +15,15 @@
 ## 中文
 
 ### 简介
-**Codex Monitor** 是一款专为 OpenAI Codex / ChatGPT 订阅用户打造的轻量监控工具。直接读取本地 `~/.codex/auth.json` 登录凭据（支持 `cc-switch` 订阅管理器），实时展示剩余用量百分比、7天重置倒计时与账号订阅到期日。
+**Codex Monitor** 是一款专为 OpenAI Codex / ChatGPT 订阅用户打造的极轻量用量监控工具。直接读取本地 `~/.codex/auth.json` 登录凭据（支持 `cc-switch` 订阅管理器），实时展示剩余用量百分比、7天重置倒计时与账号订阅到期日。
 
 <p align="center">
   <img src="assets/widget.png" alt="Widget" width="130" style="margin-right: 20px;">
   <img src="assets/menu.png" alt="Context Menu" width="180">
 </p>
 
-### 视觉特性与尾迹特效
-- **🪟 Windows 原生悬浮球** (`src/`)：
+### 特性与双端形态
+- **🪟 Windows 原生 GPU 加速悬浮球** (`src/`)：
   - 基于 Windows 原生 `.NET 4.8`，GPU DirectX 硬件加速，单文件仅 ~40 KB。
   - 支持**悬浮圆环 (72x72)** 与 **贴边胶囊 (42x96)** 平滑形变。
   - **三大全屏流光尾迹特效**：
@@ -39,9 +39,9 @@
   <em>🖌️ 东方水墨 (挥毫泼墨) 真实流体渲染效果</em>
 </p>
 
-- **🐧 Linux 桌面与终端全能支持** (`linux/`)：
-  - **桌面图形悬浮球** (`linux/codex-monitor-gui`)：基于 Python 官方标准库 Tkinter，零外部依赖，桌面置顶悬浮、自由拖拽与悬停卡片。
-  - **终端独立执行程序源码** (`linux/main.go`)：纯 Go 静态编译，无外部运行时依赖。
+- **🐧 Linux 原生顶部菜单栏常驻小工具** (`linux/`)：
+  - **顶部菜单栏常驻** (`linux/codex-monitor-tray`)：遵从 Linux / GNOME / Ubuntu 标准状态栏设计，在顶部菜单栏常驻显示 **`⚡ 68% (5d)`**，点击弹出暗黑下拉详情菜单（邮箱、Plus/Pro、到期日、重置时间）。
+  - **终端独立执行程序源码** (`linux/main.go`)：纯 Go 静态编译，专为无桌面 Docker 与 SSH 服务器打造。
 
 ---
 
@@ -50,7 +50,9 @@
 #### 📦 直接下载预编译版本 (GitHub Releases)
 前往 [**Releases 页面**](https://github.com/Scott143-dot/CodexMonitor/releases) 下载最新编译好的程序：
 - **Windows 用户**：下载 `CodexMonitor.exe` 直接双击运行。
-- **Linux 用户**：下载 `codex-monitor-linux-amd64.tar.gz` 解压后直接运行 `./codex-monitor-linux-amd64`。
+- **Linux 用户**：下载 `codex-monitor-linux-amd64.tar.gz` 解压后直接运行：
+  - 桌面菜单栏常驻：`./codex-monitor-tray`
+  - 纯终端监控模式：`./codex-monitor-linux-amd64`
 
 ---
 
@@ -63,7 +65,7 @@
 ```bash
 cd linux
 CGO_ENABLED=0 go build -ldflags="-s -w" -o codex-monitor-linux-amd64 main.go
-chmod +x codex-monitor-linux-amd64 codex-monitor-gui
+chmod +x codex-monitor-linux-amd64 codex-monitor-tray
 ```
 
 ---
@@ -82,7 +84,7 @@ CodexMonitor/
 │   ├── MainWindow.cs        # 桌面悬浮标核心组件
 │   └── TrailOverlay.cs      # 全屏穿透 Segment 物理尾迹系统
 ├── linux/                   # Linux 纯源码
-│   ├── codex-monitor-gui    # Linux 桌面原生图形悬浮球
+│   ├── codex-monitor-tray   # Linux 原生顶部状态栏常驻小工具 (Top Bar Tray)
 │   └── main.go              # Linux 终端静态二进制 Go 源码
 ├── build.bat                # Windows 本地一键编译脚本
 ├── .gitignore               # Git 忽略配置
@@ -103,15 +105,15 @@ CodexMonitor/
   <img src="assets/preview.png" alt="Codex Monitor Preview" width="280">
 </p>
 
-### Features & VFX
+### Features & Dual Form Factor
 - **Windows Desktop Widget** (`src/`):
   - Standalone executable (~40 KB), built on native `.NET 4.8` with zero dependencies.
   - GPU DirectX hardware acceleration with smooth morphing between **Floating Ring (72x72)** and **Docked Capsule (42x96)**.
   - 3 visual trail effects: Plasma Lightning, Traditional Chinese Ink Wash, and Prismatic Aurora.
   - 3 gradient themes: Blue-Indigo-Violet, Cyan-Emerald-Forest, Platinum-Gold-Titanium.
   - Auto-start toggle via context menu.
-- **Linux Desktop & CLI Suite** (`linux/`):
-  - **Desktop GUI Widget** (`linux/codex-monitor-gui`): Built with Python standard library Tkinter (zero external dependencies), draggable floating widget with hover tooltip card.
+- **Linux Native Top Bar & CLI Suite** (`linux/`):
+  - **Top Bar AppIndicator** (`linux/codex-monitor-tray`): Seamlessly integrates into Ubuntu / GNOME top menu bar displaying **`⚡ 68% (5d)`** with a clean dark dropdown details menu.
   - **CLI Standalone Binary Source** (`linux/main.go`): Pure Go source ready for static compilation.
 
 ---
@@ -121,7 +123,9 @@ CodexMonitor/
 #### 📦 Download Precompiled Binaries (GitHub Releases)
 Visit the [**Releases Page**](https://github.com/Scott143-dot/CodexMonitor/releases) to download the latest builds:
 - **Windows**: Download `CodexMonitor.exe` and double-click to run.
-- **Linux**: Download `codex-monitor-linux-amd64.tar.gz`, unpack and run `./codex-monitor-linux-amd64`.
+- **Linux**: Download `codex-monitor-linux-amd64.tar.gz`, unpack and run:
+  - Top Bar Tray Widget: `./codex-monitor-tray`
+  - CLI Terminal Monitor: `./codex-monitor-linux-amd64`
 
 ---
 
@@ -134,7 +138,7 @@ Run `build.bat` to compile with the built-in Windows `csc.exe` compiler.
 ```bash
 cd linux
 CGO_ENABLED=0 go build -ldflags="-s -w" -o codex-monitor-linux-amd64 main.go
-chmod +x codex-monitor-linux-amd64 codex-monitor-gui
+chmod +x codex-monitor-linux-amd64 codex-monitor-tray
 ```
 
 ---

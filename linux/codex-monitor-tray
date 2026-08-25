@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Codex Monitor GUI (Linux Native Standalone Executable)
-Linux 桌面原生单文件独立可执行悬浮球程序
-直接运行 (./codex-monitor-gui) 或双击即可瞬开桌面悬浮球
+Codex Monitor Tray (Linux Top Bar & System Tray)
+Linux 原生顶部菜单栏 / 状态栏常驻小工具
+直接常驻在 Ubuntu / GNOME / KDE 顶部菜单栏，显示：⚡ 68% (5d)
 """
 
 import os
@@ -15,14 +15,7 @@ import threading
 import urllib.request
 import urllib.error
 
-try:
-    import tkinter as tk
-    from tkinter import Menu
-except ImportError:
-    print("❌ 未检测到 Tkinter 图形库，正在尝试使用终端模式运行...")
-    os.system("bash " + os.path.join(os.path.dirname(__file__), "codex-monitor.sh"))
-    sys.exit(0)
-
+# 1. 查找凭据文件
 def find_auth_json():
     candidates = [
         os.getenv("CODEX_AUTH_PATH"),
@@ -138,7 +131,6 @@ def auto_refresh_token(auth_info):
             new_acc = data.get("access_token")
             new_ref = data.get("refresh_token")
             if new_acc and auth_info.get("auth_path"):
-                # 写回 auth.json
                 p = auth_info["auth_path"]
                 try:
                     with open(p, "r", encoding="utf-8") as f:
@@ -158,145 +150,23 @@ def auto_refresh_token(auth_info):
         pass
     return None
 
-class ToolTip:
-    def __init__(self, widget):
-        self.widget = widget
-        self.tip_window = None
-
-    def show(self, text, x, y):
-        if self.tip_window or not text:
-            return
-        self.tip_window = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_attributes("-topmost", True)
-        tw.wm_geometry(f"+{x}+{y}")
-        
-        frame = tk.Frame(tw, bg="#12151E", bd=1, relief="solid", highlightbackground="#333A4A", highlightthickness=1)
-        frame.pack()
-        
-        label = tk.Label(frame, text=text, justify="left", bg="#12151E", fg="#F1F5F9",
-                         font=("Ubuntu", 9), padx=10, pady=8)
-        label.pack()
-
-    def hide(self):
-        if self.tip_window:
-            self.tip_window.destroy()
-            self.tip_window = None
-
-class CodexFloatingBall:
+class LinuxTopBarMonitor:
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Codex Monitor")
-        self.root.geometry("72x72+300+300")
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        
-        try:
-            self.root.attributes("-alpha", 0.96)
-        except Exception:
-            pass
-
-        self.theme = "slate"
-        self.percentage = 100.0
-        self.reset_countdown = "--"
-        self.reset_detail = "正在同步用量..."
+        self.percentage_str = "--"
+        self.reset_cd = "--"
+        self.reset_detail = "正在连接网络..."
         self.email = "检测中..."
         self.plan_type = "--"
         self.subscription_expiry = "--"
-
-        self.canvas = tk.Canvas(self.root, width=72, height=72, bg="#0E1016", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-
-        self.tooltip = ToolTip(self.root)
-
-        self.drag_x = 0
-        self.drag_y = 0
-        self.canvas.bind("<Button-1>", self.on_press)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.canvas.bind("<Button-3>", self.show_context_menu)
-        self.canvas.bind("<Enter>", self.on_enter)
-        self.canvas.bind("<Leave>", self.on_leave)
-
-        self.draw_widget()
-        self.refresh_async()
-        self.schedule_sync()
-
-    def schedule_sync(self):
-        self.refresh_async()
-        self.root.after(60000, self.schedule_sync)
-
-    def on_press(self, event):
-        self.drag_x = event.x
-        self.drag_y = event.y
-        self.tooltip.hide()
-
-    def on_drag(self, event):
-        x = self.root.winfo_x() + (event.x - self.drag_x)
-        y = self.root.winfo_y() + (event.y - self.drag_y)
-        self.root.geometry(f"+{x}+{y}")
-
-    def on_release(self, event):
-        pass
-
-    def on_enter(self, event):
-        tip_text = f"账号: {self.email}\n类型: {self.plan_type}\n到期: {self.subscription_expiry}\n重置: {self.reset_detail}"
-        x = self.root.winfo_rootx() - 20
-        y = self.root.winfo_rooty() - 85
-        self.tooltip.show(tip_text, x, y)
-
-    def on_leave(self, event):
-        self.tooltip.hide()
-
-    def show_context_menu(self, event):
-        menu = Menu(self.root, tearoff=0, bg="#12151E", fg="#F1F5F9", activebackground="#2563EB", activeforeground="#FFFFFF")
-        menu.add_command(label="🔄 立即同步", command=self.refresh_async)
         
-        theme_menu = Menu(menu, tearoff=0, bg="#12151E", fg="#F1F5F9", activebackground="#2563EB", activeforeground="#FFFFFF")
-        theme_menu.add_command(label="🌊 蓝靛紫 (流光渐变)", command=lambda: self.set_theme("slate"))
-        theme_menu.add_command(label="🍃 青碧翠 (流光渐变)", command=lambda: self.set_theme("emerald"))
-        theme_menu.add_command(label="⚪ 白金钛 (流光渐变)", command=lambda: self.set_theme("mono"))
-        menu.add_cascade(label="🎨 色彩主题", menu=theme_menu)
-        
-        menu.add_separator()
-        menu.add_command(label="❌ 退出", command=self.root.destroy)
-        menu.tk_popup(event.x_root, event.y_root)
+        self.indicator = None
+        self.status_item = None
+        self.email_item = None
+        self.plan_item = None
+        self.expiry_item = None
+        self.reset_item = None
 
-    def set_theme(self, theme):
-        self.theme = theme
-        self.draw_widget()
-
-    def draw_widget(self):
-        self.canvas.delete("all")
-        
-        # 深底板
-        self.canvas.create_oval(3, 3, 69, 69, fill="#12141C", outline="#252A38", width=1.5)
-        # 槽轨
-        self.canvas.create_oval(7, 7, 65, 65, outline="#1E2330", width=4)
-
-        color_arc = "#38BDF8"
-        if self.theme == "emerald":
-            color_arc = "#34D399"
-        elif self.theme == "mono":
-            color_arc = "#E2E8F0"
-
-        # 进度弧
-        if self.percentage > 0:
-            extent_deg = -(self.percentage / 100.0) * 359.9
-            self.canvas.create_arc(7, 7, 65, 65, start=90, extent=extent_deg,
-                                  outline=color_arc, width=4.5, style="arc")
-
-        # 居中百分比
-        pct_str = f"{int(self.percentage)}%" if self.percentage > 0 else "--"
-        self.canvas.create_text(36, 31, text=pct_str, fill="#FFFFFF", font=("Segoe UI", 13, "bold"))
-
-        # 居中倒计时
-        self.canvas.create_text(36, 48, text=self.reset_countdown, fill="#94A3B8", font=("Segoe UI", 8, "bold"))
-
-    def refresh_async(self):
-        threading.Thread(target=self._do_fetch, daemon=True).start()
-
-    def _do_fetch(self):
+    def fetch_data(self):
         auth = fetch_local_auth()
         self.email = auth["email"]
         self.plan_type = auth["plan_type"]
@@ -307,10 +177,9 @@ class CodexFloatingBall:
             if new_tok:
                 auth["access_token"] = new_tok
             else:
-                self.percentage = 0.0
-                self.reset_countdown = "--"
-                self.reset_detail = "未检测到本地登录凭据"
-                self.root.after(0, self.draw_widget)
+                self.percentage_str = "--"
+                self.reset_cd = "--"
+                self.reset_detail = "未检测到本地凭据"
                 return
 
         proxy_url = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or \
@@ -352,7 +221,8 @@ class CodexFloatingBall:
             rate_limit = data.get("rate_limit", {})
             primary = rate_limit.get("primary_window", {}) if rate_limit else {}
             used_pct = float(primary.get("used_percent", 0.0))
-            self.percentage = max(0.0, min(100.0, 100.0 - used_pct))
+            pct_val = max(0.0, min(100.0, 100.0 - used_pct))
+            self.percentage_str = f"{int(pct_val)}%"
             sec = int(primary.get("reset_after_seconds", 0))
 
             days = sec // 86400
@@ -360,22 +230,123 @@ class CodexFloatingBall:
             mins = (sec % 3600) // 60
 
             if days > 0:
-                self.reset_countdown = f"{days}d"
-                self.reset_detail = f"{days}天 ${hours}小时后"
+                self.reset_cd = f"{days}d"
+                self.reset_detail = f"{days}天 {hours}小时后"
             elif hours > 0:
-                self.reset_countdown = f"{hours}h"
+                self.reset_cd = f"{hours}h"
                 self.reset_detail = f"{hours}小时 {mins}分钟后"
             else:
-                self.reset_countdown = f"{mins}m"
+                self.reset_cd = f"{mins}m"
                 self.reset_detail = f"{mins}分钟后"
         except Exception:
             self.reset_detail = "正在连接网络..."
 
-        self.root.after(0, self.draw_widget)
+    def run_gtk(self):
+        import gi
+        gi.require_version('Gtk', '3.0')
+        try:
+            gi.require_version('AppIndicator3', '0.1')
+            from gi.repository import AppIndicator3 as appindicator
+        except Exception:
+            try:
+                gi.require_version('AyatanaAppIndicator3', '0.1')
+                from gi.repository import AyatanaAppIndicator3 as appindicator
+            except Exception:
+                appindicator = None
+
+        from gi.repository import Gtk, GLib
+
+        if appindicator:
+            self.indicator = appindicator.Indicator.new(
+                "codex-monitor",
+                "utilities-system-monitor",
+                appindicator.IndicatorCategory.APPLICATION_STATUS
+            )
+            self.indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+            self.indicator.set_label("⚡ --", "100%")
+        else:
+            print("⚠️ 未找到 AppIndicator3，启用 Gtk.StatusIcon...")
+            self.status_icon = Gtk.StatusIcon()
+            self.status_icon.set_from_icon_name("utilities-system-monitor")
+            self.status_icon.set_tooltip_text("Codex Monitor")
+
+        # 创建下拉菜单
+        menu = Gtk.Menu()
+
+        self.status_item = Gtk.MenuItem(label="⚡ 额度: -- (-- 天)")
+        self.status_item.set_sensitive(False)
+        menu.append(self.status_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        self.email_item = Gtk.MenuItem(label="📧 账号: --")
+        self.email_item.set_sensitive(False)
+        menu.append(self.email_item)
+
+        self.plan_item = Gtk.MenuItem(label="💎 类型: --")
+        self.plan_item.set_sensitive(False)
+        menu.append(self.plan_item)
+
+        self.expiry_item = Gtk.MenuItem(label="📅 到期: --")
+        self.expiry_item.set_sensitive(False)
+        menu.append(self.expiry_item)
+
+        self.reset_item = Gtk.MenuItem(label="⏱️ 重置: --")
+        self.reset_item.set_sensitive(False)
+        menu.append(self.reset_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        refresh_item = Gtk.MenuItem(label="🔄 立即刷新")
+        refresh_item.connect("activate", lambda _: self.trigger_refresh())
+        menu.append(refresh_item)
+
+        quit_item = Gtk.MenuItem(label="❌ 退出")
+        quit_item.connect("activate", lambda _: Gtk.main_quit())
+        menu.append(quit_item)
+
+        menu.show_all()
+
+        if self.indicator:
+            self.indicator.set_menu(menu)
+
+        # 启动后台数据轮询
+        def update_ui():
+            label_text = f"⚡ {self.percentage_str} ({self.reset_cd})"
+            if self.indicator:
+                self.indicator.set_label(label_text, "100% (99d)")
+            
+            self.status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} (重置倒计时: {self.reset_cd})")
+            self.email_item.set_label(f"📧 账号: {self.email}")
+            self.plan_item.set_label(f"💎 类型: {self.plan_type}")
+            self.expiry_item.set_label(f"📅 到期: {self.subscription_expiry}")
+            self.reset_item.set_label(f"⏱️ 重置: {self.reset_detail}")
+            return False
+
+        def poll_loop():
+            while True:
+                self.fetch_data()
+                GLib.idle_add(update_ui)
+                time.sleep(60)
+
+        threading.Thread(target=poll_loop, daemon=True).start()
+        Gtk.main()
+
+    def trigger_refresh(self):
+        def _do():
+            self.fetch_data()
+            import gi
+            from gi.repository import GLib
+            GLib.idle_add(lambda: self.status_item.set_label(f"⚡ 剩余额度: {self.percentage_str} ({self.reset_cd})"))
+        threading.Thread(target=_do, daemon=True).start()
 
     def run(self):
-        self.root.mainloop()
+        try:
+            self.run_gtk()
+        except Exception as e:
+            print(f"❌ GTK 菜单栏初始化失败 ({e})，正在以终端模式运行...")
+            os.system("bash " + os.path.join(os.path.dirname(__file__), "codex-monitor.sh"))
 
 if __name__ == "__main__":
-    app = CodexFloatingBall()
+    app = LinuxTopBarMonitor()
     app.run()

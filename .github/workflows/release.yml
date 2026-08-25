@@ -52,8 +52,8 @@ jobs:
         run: |
           cd linux
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o codex-monitor-linux-amd64 main.go
-          chmod +x codex-monitor-linux-amd64 codex-monitor-gui
-          tar -czvf codex-monitor-linux-amd64.tar.gz codex-monitor-linux-amd64 codex-monitor-gui
+          chmod +x codex-monitor-linux-amd64 codex-monitor-tray
+          tar -czvf codex-monitor-linux-amd64.tar.gz codex-monitor-linux-amd64 codex-monitor-tray
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
