@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows Binary (x64 / AnyCPU)
+    name: Build Windows Binary (x64)
     runs-on: windows-latest
     steps:
       - name: Checkout Code
@@ -28,15 +28,12 @@ jobs:
         shell: pwsh
         run: |
           & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /t:winexe /o+ /platform:anycpu /nowarn:0618 /lib:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Xaml.dll /r:WindowsBase.dll /r:PresentationCore.dll /r:PresentationFramework.dll /out:CodexMonitor-windows-x64.exe src\*.cs
-          Copy-Item CodexMonitor-windows-x64.exe CodexMonitor.exe
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: CodexMonitor-Windows
-          path: |
-            CodexMonitor-windows-x64.exe
-            CodexMonitor.exe
+          path: CodexMonitor-windows-x64.exe
 
   build-linux-amd64:
     name: Build Linux Binary (x86_64 / AMD64)
@@ -95,18 +92,16 @@ jobs:
           body: |
             ### 📦 Release Assets & Architecture Guide / 资产与系统架构说明
 
-            | 资产文件名 (File Asset) | 适用操作系统 (OS) | CPU 架构 (Architecture) | 说明 (Description) |
+            | 资产文件名 (Asset) | 适用操作系统 (OS) | CPU 架构 (Architecture) | 说明 (Description) |
             | :--- | :--- | :--- | :--- |
             | **`CodexMonitor-windows-x64.exe`** | **Windows 10 / 11 / Server** | **x86_64 / x64 (64位)** | Windows 原生 GPU 加速桌面悬浮标 |
-            | **`CodexMonitor.exe`** | **Windows 10 / 11 / Server** | **AnyCPU (通用兼容)** | Windows 独立可执行程序 |
-            | **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64 (Intel & AMD 64位)** | Linux 状态栏托盘与终端一体化独立程序 |
+            | **`codex-monitor-linux-x86_64.tar.gz`** | **Linux (Ubuntu/Debian/Arch/Fedora)** | **x86_64 / AMD64 (64位)** | Linux 状态栏托盘与终端一体化独立程序 |
 
             #### 🚀 Quick Start / 快速开始
             - **Windows**: 下载 `CodexMonitor-windows-x64.exe` 双击直接运行。
             - **Linux**: 下载 `codex-monitor-linux-x86_64.tar.gz` 解压后运行 `./codex-monitor -d`。
           files: |
             release-assets/CodexMonitor-windows-x64.exe
-            release-assets/CodexMonitor.exe
             release-assets/codex-monitor-linux-x86_64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
