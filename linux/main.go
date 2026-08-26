@@ -547,7 +547,7 @@ func updateAutostartMenuItem() {
 }
 
 func onReady() {
-	systray.SetTitle("--")
+	systray.SetTitle("剩余 --  刷新 --")
 	systray.SetTooltip("Codex Monitor (Linux Native Standalone)")
 
 	mStatus = systray.AddMenuItem("剩余额度: --", "")
@@ -582,9 +582,14 @@ func onReady() {
 		if refreshTime == "" {
 			refreshTime = "--"
 		}
+		shortRefreshTime := refreshTime
+		if len(shortRefreshTime) >= len("15:04:05") && strings.Contains(shortRefreshTime, " ") {
+			shortRefreshTime = shortRefreshTime[len(shortRefreshTime)-len("15:04:05"):]
+		}
 
-		systray.SetTitle(fmt.Sprintf("%s (%s)", d.PercentageStr, d.ResetCountdown))
-		systray.SetTooltip(fmt.Sprintf("Codex: %s (重置: %s)", d.PercentageStr, d.ResetCountdown))
+		// 状态栏同时保留圆环图标和右侧文字：剩余额度 + 最近刷新时间。
+		systray.SetTitle(fmt.Sprintf("剩余 %s  刷新 %s", d.PercentageStr, shortRefreshTime))
+		systray.SetTooltip(fmt.Sprintf("剩余 %s (重置: %s，刷新: %s)", d.PercentageStr, d.ResetCountdown, refreshTime))
 		systray.SetIcon(generateTrayIcon(d.Percentage))
 
 		mStatus.SetTitle(fmt.Sprintf("剩余额度: %s (倒计时: %s)", d.PercentageStr, d.ResetCountdown))
