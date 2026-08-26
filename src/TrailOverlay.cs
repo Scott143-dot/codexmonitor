@@ -48,6 +48,9 @@ namespace CodexMonitor
         private const double BoundsPadding = 52.0;
         private const double OverlayReserve = 96.0;
         private const double MinOverlaySize = 160.0;
+        // 固定透明窗口的 DIP 尺寸，避免拖动过程中反复改变透明 HWND 的宽高。
+        // 轨迹最多保留约 20 个短片段，640 DIP 足以覆盖常见高速移动时的尾迹范围。
+        private const double FixedOverlaySize = 640.0;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
@@ -77,7 +80,7 @@ namespace CodexMonitor
         private double _physicalTop;
         private double _physicalWidth;
         private double _physicalHeight;
-        private const double MinPointIntervalMs = 8.0;
+        private const double MinPointIntervalMs = 10.0;
 
         private static readonly SolidColorBrush TransBrush = Brushes.Transparent;
 
@@ -94,6 +97,7 @@ namespace CodexMonitor
         private readonly Pen[,] _rainbowPens = new Pen[6, FadeBucketCount];
         private readonly SolidColorBrush[] _cyanParticleBrushes = new SolidColorBrush[FadeBucketCount];
         private readonly SolidColorBrush[] _yellowParticleBrushes = new SolidColorBrush[FadeBucketCount];
+        private readonly MatrixTransform _renderTransform = new MatrixTransform();
 
         public TrailOverlay()
         {
@@ -278,13 +282,13 @@ namespace CodexMonitor
                     double ny = dX / dist;
 
                     // 容量限制，快速移动时剔除过旧片段，杜绝低性能机器排队积压卡顿
-                    if (_segments.Count > 25)
+                    if (_segments.Count > 20)
                     {
-                        _segments.RemoveRange(0, _segments.Count - 20);
+                        _segments.RemoveRange(0, _segments.Count - 16);
                     }
-                    if (_particles.Count > 20)
+                    if (_particles.Count > 16)
                     {
-                        _particles.RemoveRange(0, _particles.Count - 15);
+                        _particles.RemoveRange(0, _particles.Count - 12);
                     }
 
                     if (TrailMode == "laser")
@@ -411,7 +415,11 @@ namespace CodexMonitor
             using (var ctx = geometry.Open())
             {
                 ctx.BeginFigure(points[0], false, false);
-                ctx.PolyLineTo(points.GetRange(1, points.Count - 1), true, true);
+                // 不再用 GetRange 创建临时 List；高速拖动时这类小对象会快速累积并触发 GC。
+                for (int i = 1; i < points.Count; i++)
+                {
+                    ctx.LineTo(points[i], true, true);
+                }
             }
             geometry.Freeze();
             return geometry;
@@ -434,35 +442,33 @@ namespace CodexMonitor
             double maxX = latestPoint.X;
             double maxY = latestPoint.Y;
 
-            Action<Point> include = p =>
-            {
-                minX = Math.Min(minX, p.X);
-                minY = Math.Min(minY, p.Y);
-                maxX = Math.Max(maxX, p.X);
-                maxY = Math.Max(maxY, p.Y);
-            };
-
             foreach (var segment in _segments)
             {
-                include(segment.P1);
-                include(segment.P2);
+                IncludePoint(segment.P1, ref minX, ref minY, ref maxX, ref maxY);
+                IncludePoint(segment.P2, ref minX, ref minY, ref maxX, ref maxY);
                 if (segment.MainLine != null)
                 {
-                    foreach (var p in segment.MainLine) include(p);
+                    foreach (var p in segment.MainLine)
+                    {
+                        IncludePoint(p, ref minX, ref minY, ref maxX, ref maxY);
+                    }
                 }
                 if (segment.TendrilLines != null)
                 {
                     foreach (var line in segment.TendrilLines)
                     {
                         if (line == null) continue;
-                        foreach (var p in line) include(p);
+                        foreach (var p in line)
+                        {
+                            IncludePoint(p, ref minX, ref minY, ref maxX, ref maxY);
+                        }
                     }
                 }
             }
 
             foreach (var particle in _particles)
             {
-                include(new Point(particle.X, particle.Y));
+                IncludePoint(new Point(particle.X, particle.Y), ref minX, ref minY, ref maxX, ref maxY);
             }
 
             double contentPadding = BoundsPadding * _dpiScale;
@@ -479,13 +485,25 @@ namespace CodexMonitor
                 requiredBottom <= _physicalTop + _physicalHeight;
             if (alreadyCovered) return;
 
+            // 尾迹窗口只在内容离开缓冲区时移动，尺寸保持固定；这样不会在拖动中
+            // 反复触发 WPF 透明窗口的布局和 DWM 重建。
             double padding = (BoundsPadding + OverlayReserve) * _dpiScale;
-            double left = minX - padding;
-            double top = minY - padding;
-            double width = Math.Max(MinOverlaySize * _dpiScale, maxX - minX + padding * 2.0);
-            double height = Math.Max(MinOverlaySize * _dpiScale, maxY - minY + padding * 2.0);
+            double fixedSize = Math.Max(MinOverlaySize * _dpiScale, FixedOverlaySize * _dpiScale);
+            double width = Math.Max(fixedSize, maxX - minX + padding * 2.0);
+            double height = Math.Max(fixedSize, maxY - minY + padding * 2.0);
+            double left = (minX + maxX) / 2.0 - width / 2.0;
+            double top = (minY + maxY) / 2.0 - height / 2.0;
 
             SetPhysicalBoundsUnsafe(left, top, width, height);
+        }
+
+        private static void IncludePoint(Point point, ref double minX, ref double minY,
+            ref double maxX, ref double maxY)
+        {
+            if (point.X < minX) minX = point.X;
+            if (point.Y < minY) minY = point.Y;
+            if (point.X > maxX) maxX = point.X;
+            if (point.Y > maxY) maxY = point.Y;
         }
 
         private void SetPhysicalBoundsUnsafe(double left, double top, double width, double height)
@@ -506,12 +524,17 @@ namespace CodexMonitor
 
             // SetWindowPos 使用真实桌面物理像素，绕开 WPF 在不同 DPI 显示器间的
             // 逻辑坐标换算；尾迹内容再在 OnRender 中用当前窗口 DPI 转回 DIP。
-            Width = width / _dpiScale;
-            Height = height / _dpiScale;
+            // 同尺寸移动时不要重复触发 WPF layout；尺寸只有首次显示或 DPI 改变时才更新。
+            double widthDip = width / _dpiScale;
+            double heightDip = height / _dpiScale;
+            if (Math.Abs(Width - widthDip) > 0.5) Width = widthDip;
+            if (Math.Abs(Height - heightDip) > 0.5) Height = heightDip;
             SetWindowPos(_hwnd, HWND_TOPMOST,
                 (int)Math.Round(left), (int)Math.Round(top),
                 Math.Max(1, (int)Math.Round(width)), Math.Max(1, (int)Math.Round(height)),
                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            // GetDpiForWindow 只在窗口实际跨屏后才会变化；保留一次轻量读取，
+            // 但不再因为每次移动都重新设置 WPF 尺寸。
             UpdateDpiScale();
         }
 
@@ -564,7 +587,15 @@ namespace CodexMonitor
             lock (_lock)
             {
                 var now = DateTime.UtcNow;
-                _segments.RemoveAll(s => (now - s.CreatedT).TotalSeconds >= s.Life);
+                // 手动倒序移除，避免 RemoveAll 为每一帧创建捕获 now 的委托/闭包。
+                for (int i = _segments.Count - 1; i >= 0; i--)
+                {
+                    var segment = _segments[i];
+                    if ((now - segment.CreatedT).TotalSeconds >= segment.Life)
+                    {
+                        _segments.RemoveAt(i);
+                    }
+                }
 
                 for (int i = _particles.Count - 1; i >= 0; i--)
                 {
@@ -604,9 +635,9 @@ namespace CodexMonitor
                 // 段和粒子保存的是真实桌面物理坐标；局部窗口只负责附近的绘制。
                 // 这一步让负坐标、不同缩放比例的双屏都使用同一坐标系。
                 double invDpi = 1.0 / _dpiScale;
-                var matrix = new Matrix(invDpi, 0, 0, invDpi,
+                _renderTransform.Matrix = new Matrix(invDpi, 0, 0, invDpi,
                     -_physicalLeft * invDpi, -_physicalTop * invDpi);
-                dc.PushTransform(new MatrixTransform(matrix));
+                dc.PushTransform(_renderTransform);
                 try
                 {
                     if (TrailMode == "laser")

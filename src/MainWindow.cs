@@ -76,6 +76,7 @@ namespace CodexMonitor
 
         private readonly DispatcherTimer _hoverTimer;
         private readonly DispatcherTimer _autoSyncTimer;
+        private readonly DispatcherTimer _dragTimer;
         private System.Windows.Controls.ContextMenu _currentMenu;
         private DispatcherTimer _menuAutoCloseTimer;
         private DateTime _menuLeaveStart;
@@ -86,6 +87,9 @@ namespace CodexMonitor
         private double _morphTargetVal;
         private DateTime _morphStartTime;
         private const double MorphDurationMs = 150.0;
+        private double _pendingDragX;
+        private double _pendingDragY;
+        private bool _hasPendingDrag;
 
         private IntPtr _hwnd = IntPtr.Zero;
         private Rect _virtualDesktopBoundsCache;
@@ -162,6 +166,15 @@ namespace CodexMonitor
             _hoverTimer.Tick += (s, e) => CheckHoverHysteresis();
             _hoverTimer.Start();
 
+            // 鼠标硬件事件可能达到数百/上千 Hz，但屏幕只按帧显示。
+            // 只保留最新位置并按 Render 优先级每帧应用一次，避免 UI 消息队列和
+            // WPF 透明窗口被高速 MouseMove 持续推着重排。
+            _dragTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(16)
+            };
+            _dragTimer.Tick += (s, e) => ApplyPendingDragPosition();
+
             // 启动时立即预填充本地已解析的账号身份
             try
             {
@@ -193,6 +206,7 @@ namespace CodexMonitor
             {
                 _topmostTimer.Stop();
                 _hoverTimer.Stop();
+                _dragTimer.Stop();
                 _autoSyncTimer.Stop();
                 if (_menuAutoCloseTimer != null) _menuAutoCloseTimer.Stop();
                 if (_trayIcon != null) _trayIcon.Dispose();
@@ -552,6 +566,8 @@ namespace CodexMonitor
                 _trail.ResetLastPoint();
                 _trail.EnsureTopmost();
             }
+            _hasPendingDrag = false;
+            _dragTimer.Start();
             CaptureMouse();
         }
 
@@ -575,15 +591,31 @@ namespace CodexMonitor
                 newX = Math.Max(vLeft, Math.Min(vRight - Width, newX));
                 newY = Math.Max(vTop, Math.Min(vBottom - Height, newY));
 
-                bool shapeChanged = false;
-                if (_isDocked)
-                {
-                    _isDocked = false;
-                    _dockSide = "none";
-                    _morphProg = 1.0;
-                    shapeChanged = true;
-                }
+                _pendingDragX = newX;
+                _pendingDragY = newY;
+                _hasPendingDrag = true;
+            }
+        }
 
+        private void ApplyPendingDragPosition()
+        {
+            if (!_isDragging || !_hasPendingDrag) return;
+
+            double newX = _pendingDragX;
+            double newY = _pendingDragY;
+            _hasPendingDrag = false;
+
+            bool shapeChanged = false;
+            if (_isDocked)
+            {
+                _isDocked = false;
+                _dockSide = "none";
+                _morphProg = 1.0;
+                shapeChanged = true;
+            }
+
+            if (Math.Abs(Left - newX) > 0.1 || Math.Abs(Top - newY) > 0.1)
+            {
                 Left = newX;
                 Top = newY;
 
@@ -591,8 +623,9 @@ namespace CodexMonitor
                 {
                     _trail.AddPoint(GetWidgetCenterDevice());
                 }
-                if (shapeChanged) InvalidateVisual();
             }
+
+            if (shapeChanged) InvalidateVisual();
         }
 
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
@@ -600,7 +633,10 @@ namespace CodexMonitor
             base.OnMouseLeftButtonUp(e);
             if (_isDragging)
             {
+                ApplyPendingDragPosition();
                 _isDragging = false;
+                _dragTimer.Stop();
+                _hasPendingDrag = false;
                 ReleaseMouseCapture();
                 if (_trail != null) _trail.ResetLastPoint();
 
