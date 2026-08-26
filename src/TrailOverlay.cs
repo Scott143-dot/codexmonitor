@@ -49,8 +49,12 @@ namespace CodexMonitor
         private const double OverlayReserve = 96.0;
         private const double MinOverlaySize = 160.0;
         // 固定透明窗口的 DIP 尺寸，避免拖动过程中反复改变透明 HWND 的宽高。
-        // 轨迹最多保留约 20 个短片段，640 DIP 足以覆盖常见高速移动时的尾迹范围。
-        private const double FixedOverlaySize = 640.0;
+        // 缩小透明分层窗口，降低 WPF 每帧合成的像素量。
+        private const double FixedOverlaySize = 512.0;
+        private const int MaxStoredSegments = 12;
+        private const int MaxRenderedSegments = 8;
+        private const int MaxStoredParticles = 8;
+        private const int MaxRenderedParticles = 6;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
@@ -282,13 +286,13 @@ namespace CodexMonitor
                     double ny = dX / dist;
 
                     // 容量限制，快速移动时剔除过旧片段，杜绝低性能机器排队积压卡顿
-                    if (_segments.Count > 20)
+                    if (_segments.Count > MaxStoredSegments)
                     {
-                        _segments.RemoveRange(0, _segments.Count - 16);
+                        _segments.RemoveRange(0, _segments.Count - 8);
                     }
-                    if (_particles.Count > 16)
+                    if (_particles.Count > MaxStoredParticles)
                     {
-                        _particles.RemoveRange(0, _particles.Count - 12);
+                        _particles.RemoveRange(0, _particles.Count - 6);
                     }
 
                     if (TrailMode == "laser")
@@ -662,8 +666,10 @@ namespace CodexMonitor
 
         private void RenderParticles(DrawingContext dc, DateTime now)
         {
-            foreach (var spk in _particles)
+            int start = Math.Max(0, _particles.Count - MaxRenderedParticles);
+            for (int i = start; i < _particles.Count; i++)
             {
+                var spk = _particles[i];
                 double prog = 1.0 - (now - spk.Born).TotalSeconds / spk.Life;
                 if (prog > 0)
                 {
@@ -681,8 +687,10 @@ namespace CodexMonitor
         // ==================== 1. 闪电 (裂空电弧) ====================
         private void RenderPlasmaLightning(DrawingContext dc, DateTime now)
         {
-            foreach (var seg in _segments)
+            int start = Math.Max(0, _segments.Count - MaxRenderedSegments);
+            for (int segmentIndex = start; segmentIndex < _segments.Count; segmentIndex++)
             {
+                var seg = _segments[segmentIndex];
                 if (seg.MainLine == null || seg.MainLine.Count < 2) continue;
                 double age = (now - seg.CreatedT).TotalSeconds;
                 double ratio = Math.Max(0.0, 1.0 - (age / seg.Life));
@@ -705,8 +713,10 @@ namespace CodexMonitor
         // ==================== 2. 🖌️ 东方水墨烟云 (100% 顺滑 Segment · 彻底消灭平行线 · 通透水晕) ====================
         private void RenderFluidBraidedInkWash(DrawingContext dc, DateTime now)
         {
-            foreach (var seg in _segments)
+            int start = Math.Max(0, _segments.Count - MaxRenderedSegments);
+            for (int segmentIndex = start; segmentIndex < _segments.Count; segmentIndex++)
             {
+                var seg = _segments[segmentIndex];
                 double age = (now - seg.CreatedT).TotalSeconds;
                 double ratio = Math.Max(0.0, 1.0 - (age / seg.Life));
                 int bucket = GetFadeBucket(ratio);
@@ -741,8 +751,10 @@ namespace CodexMonitor
         // ==================== 3. 混沌极光 (完全交织缠绕 · 告别平行排布) ====================
         private void RenderChaoticBraidedRainbow(DrawingContext dc, DateTime now)
         {
-            foreach (var seg in _segments)
+            int start = Math.Max(0, _segments.Count - MaxRenderedSegments);
+            for (int segmentIndex = start; segmentIndex < _segments.Count; segmentIndex++)
             {
+                var seg = _segments[segmentIndex];
                 double age = (now - seg.CreatedT).TotalSeconds;
                 double ratio = Math.Max(0.0, 1.0 - (age / seg.Life));
                 int bucket = GetFadeBucket(ratio);

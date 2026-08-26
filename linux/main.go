@@ -540,9 +540,9 @@ func updateAutostartMenuItem() {
 		return
 	}
 	if isAutostartEnabled() {
-		mAutostart.SetTitle("✅ 开机自启动 (已开启)")
+		mAutostart.SetTitle("开机自启动 (已开启)")
 	} else {
-		mAutostart.SetTitle("⬜ 开机自启动 (未开启)")
+		mAutostart.SetTitle("开机自启动 (未开启)")
 	}
 }
 
@@ -554,28 +554,28 @@ func onReady() {
 	mStatus.Disable()
 	systray.AddSeparator()
 
-	mEmail = systray.AddMenuItem("📧 账号: --", "")
+	mEmail = systray.AddMenuItem("账号: --", "")
 	mEmail.Disable()
 
-	mPlan = systray.AddMenuItem("💎 类型: --", "")
+	mPlan = systray.AddMenuItem("类型: --", "")
 	mPlan.Disable()
 
-	mExpiry = systray.AddMenuItem("📅 到期: --", "")
+	mExpiry = systray.AddMenuItem("到期: --", "")
 	mExpiry.Disable()
 
-	mReset = systray.AddMenuItem("⏱️ 重置: --", "")
+	mReset = systray.AddMenuItem("重置: --", "")
 	mReset.Disable()
 
-	mRefreshAt = systray.AddMenuItem("🕒 最近刷新: --", "")
+	mRefreshAt = systray.AddMenuItem("最近刷新: --", "")
 	mRefreshAt.Disable()
 
 	systray.AddSeparator()
-	mRefresh = systray.AddMenuItem("🔄 立即刷新", "立即拉取最新用量")
-	mAutostart = systray.AddMenuItem("⬜ 开机自启动", "切换登录桌面时自动启动")
+	mRefresh = systray.AddMenuItem("立即刷新", "立即拉取最新用量")
+	mAutostart = systray.AddMenuItem("开机自启动", "切换登录桌面时自动启动")
 	updateAutostartMenuItem()
 
 	systray.AddSeparator()
-	mQuit = systray.AddMenuItem("❌ 退出", "退出 Codex Monitor")
+	mQuit = systray.AddMenuItem("退出", "退出 Codex Monitor")
 
 	publishData := func(d UsageData) {
 		refreshTime := d.RefreshTime
@@ -593,11 +593,11 @@ func onReady() {
 		systray.SetIcon(generateTrayIcon(d.Percentage))
 
 		mStatus.SetTitle(fmt.Sprintf("剩余额度: %s (倒计时: %s)", d.PercentageStr, d.ResetCountdown))
-		mEmail.SetTitle(fmt.Sprintf("📧 账号: %s", d.Email))
-		mPlan.SetTitle(fmt.Sprintf("💎 类型: %s", d.PlanType))
-		mExpiry.SetTitle(fmt.Sprintf("📅 到期: %s", d.SubscriptionExpiry))
-		mReset.SetTitle(fmt.Sprintf("⏱️ 重置: %s", d.ResetDetail))
-		mRefreshAt.SetTitle(fmt.Sprintf("🕒 最近刷新: %s", refreshTime))
+		mEmail.SetTitle(fmt.Sprintf("账号: %s", d.Email))
+		mPlan.SetTitle(fmt.Sprintf("类型: %s", d.PlanType))
+		mExpiry.SetTitle(fmt.Sprintf("到期: %s", d.SubscriptionExpiry))
+		mReset.SetTitle(fmt.Sprintf("重置: %s", d.ResetDetail))
+		mRefreshAt.SetTitle(fmt.Sprintf("最近刷新: %s", refreshTime))
 	}
 
 	var refreshLock sync.Mutex
@@ -660,11 +660,11 @@ func runCliDashboard(watch bool) {
 		fmt.Println("==================================================")
 		fmt.Println("  Codex Monitor (Linux Standalone ELF Binary)")
 		fmt.Println("==================================================")
-		fmt.Printf("  📧 账号: %s\n", d.Email)
-		fmt.Printf("  💎 计划: %s\n", d.PlanType)
-		fmt.Printf("  📅 到期: %s\n", d.SubscriptionExpiry)
-		fmt.Printf("  ⏱️ 重置: %s\n", d.ResetDetail)
-		fmt.Printf("  🕒 最近刷新: %s\n", d.RefreshTime)
+		fmt.Printf("  账号: %s\n", d.Email)
+		fmt.Printf("  计划: %s\n", d.PlanType)
+		fmt.Printf("  到期: %s\n", d.SubscriptionExpiry)
+		fmt.Printf("  重置: %s\n", d.ResetDetail)
+		fmt.Printf("  最近刷新: %s\n", d.RefreshTime)
 		fmt.Println("--------------------------------------------------")
 		barLen := 20
 		filled := int((d.Percentage / 100.0) * float64(barLen))
@@ -718,7 +718,7 @@ func main() {
 			p, err := os.StartProcess(cmd, append([]string{cmd}, cmdArgs...), attr)
 			if err == nil {
 				_ = p.Release()
-				fmt.Println("🚀 Codex Monitor 已在后台持久化运行 (关掉终端亦不退出)！")
+				fmt.Println("Codex Monitor 已在后台持久化运行 (关掉终端亦不退出)！")
 				return
 			}
 		}
