@@ -38,6 +38,8 @@ type UsageData struct {
 	PercentageStr      string
 	ResetCountdown     string
 	ResetDetail        string
+	RefreshTime        string
+	Success            bool
 	Email              string
 	PlanType           string
 	SubscriptionExpiry string
@@ -51,6 +53,7 @@ var (
 	mPlan       *systray.MenuItem
 	mExpiry     *systray.MenuItem
 	mReset      *systray.MenuItem
+	mRefreshAt  *systray.MenuItem
 	mAutostart  *systray.MenuItem
 	mRefresh    *systray.MenuItem
 	mQuit       *systray.MenuItem
@@ -242,10 +245,15 @@ func autoRefreshToken(info *AuthInfo) string {
 	return ""
 }
 
-func fetchUsageData() UsageData {
+func fetchUsageData() (data UsageData) {
+	defer func() {
+		// 记录本次请求结束时间，成功和失败都能在详情中看到最近刷新时间。
+		data.RefreshTime = time.Now().Format("2006-01-02 15:04:05")
+	}()
+
 	auth := fetchLocalAuth()
-	data := UsageData{
-		Percentage:         100.0,
+	data = UsageData{
+		Percentage:         0.0,
 		PercentageStr:      "--",
 		ResetCountdown:     "--",
 		ResetDetail:        "正在同步用量...",
@@ -353,6 +361,7 @@ func fetchUsageData() UsageData {
 		data.ResetDetail = fmt.Sprintf("%d分钟后", mins)
 	}
 
+	data.Success = true
 	return data
 }
 
@@ -557,6 +566,9 @@ func onReady() {
 	mReset = systray.AddMenuItem("⏱️ 重置: --", "")
 	mReset.Disable()
 
+	mRefreshAt = systray.AddMenuItem("🕒 最近刷新: --", "")
+	mRefreshAt.Disable()
+
 	systray.AddSeparator()
 	mRefresh = systray.AddMenuItem("🔄 立即刷新", "立即拉取最新用量")
 	mAutostart = systray.AddMenuItem("⬜ 开机自启动", "切换登录桌面时自动启动")
@@ -565,11 +577,11 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("❌ 退出", "退出 Codex Monitor")
 
-	updateData := func() {
-		d := fetchUsageData()
-		dataMutex.Lock()
-		currentData = d
-		dataMutex.Unlock()
+	publishData := func(d UsageData) {
+		refreshTime := d.RefreshTime
+		if refreshTime == "" {
+			refreshTime = "--"
+		}
 
 		systray.SetTitle(fmt.Sprintf("%s (%s)", d.PercentageStr, d.ResetCountdown))
 		systray.SetTooltip(fmt.Sprintf("Codex: %s (重置: %s)", d.PercentageStr, d.ResetCountdown))
@@ -580,15 +592,45 @@ func onReady() {
 		mPlan.SetTitle(fmt.Sprintf("💎 类型: %s", d.PlanType))
 		mExpiry.SetTitle(fmt.Sprintf("📅 到期: %s", d.SubscriptionExpiry))
 		mReset.SetTitle(fmt.Sprintf("⏱️ 重置: %s", d.ResetDetail))
+		mRefreshAt.SetTitle(fmt.Sprintf("🕒 最近刷新: %s", refreshTime))
+	}
+
+	var refreshLock sync.Mutex
+	updateData := func() {
+		refreshLock.Lock()
+		defer refreshLock.Unlock()
+
+		// 刷新期间不改动托盘和详情内容，保持上一次有效状态，
+		// 避免用户看到额度瞬间跳回默认值或出现网络请求提示。
+		dataMutex.RLock()
+		previous := currentData
+		dataMutex.RUnlock()
+
+		mRefresh.Disable()
+		fresh := fetchUsageData()
+
+		// 请求失败时继续保留额度和倒计时，只把错误显示在重置详情中。
+		// 这样网络瞬断不会让托盘图标和百分比闪成默认值。
+		if !fresh.Success && previous.PercentageStr != "" && previous.PercentageStr != "--" {
+			fresh.Percentage = previous.Percentage
+			fresh.PercentageStr = previous.PercentageStr
+			fresh.ResetCountdown = previous.ResetCountdown
+		}
+
+		dataMutex.Lock()
+		currentData = fresh
+		dataMutex.Unlock()
+		publishData(fresh)
+		mRefresh.Enable()
 	}
 
 	go func() {
-		updateData()
+		go updateData()
 		ticker := time.NewTicker(60 * time.Second)
 		for {
 			select {
 			case <-ticker.C:
-				updateData()
+				go updateData()
 			case <-mRefresh.ClickedCh:
 				go updateData()
 			case <-mAutostart.ClickedCh:
@@ -617,6 +659,7 @@ func runCliDashboard(watch bool) {
 		fmt.Printf("  💎 计划: %s\n", d.PlanType)
 		fmt.Printf("  📅 到期: %s\n", d.SubscriptionExpiry)
 		fmt.Printf("  ⏱️ 重置: %s\n", d.ResetDetail)
+		fmt.Printf("  🕒 最近刷新: %s\n", d.RefreshTime)
 		fmt.Println("--------------------------------------------------")
 		barLen := 20
 		filled := int((d.Percentage / 100.0) * float64(barLen))
@@ -624,7 +667,7 @@ func runCliDashboard(watch bool) {
 		fmt.Printf("  额度: %4s [%s] (%s)\n", d.PercentageStr, bar, d.ResetCountdown)
 		fmt.Println("==================================================")
 		if watch {
-			fmt.Printf("  🕒 刷新时间: %s (按 Ctrl+C 退出)\n", time.Now().Format("15:04:05"))
+			fmt.Println("  按 Ctrl+C 退出")
 		}
 	}
 

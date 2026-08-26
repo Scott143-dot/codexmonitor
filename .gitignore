@@ -10,6 +10,9 @@
 *.log
 linux/codex-monitor
 codex-monitor
+linux/codex-monitor-linux-test
+codex-monitor-linux-x86_64-local
+codex-monitor-linux-x86_64-local.tar.gz
 
 # IDE & Editor files
 .vscode/
