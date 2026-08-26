@@ -44,17 +44,21 @@ type UsageData struct {
 }
 
 var (
-	currentData  UsageData
-	dataMutex    sync.RWMutex
-	mStatus      *systray.MenuItem
-	mEmail       *systray.MenuItem
-	mPlan        *systray.MenuItem
-	mExpiry      *systray.MenuItem
-	mReset       *systray.MenuItem
-	mAutostart   *systray.MenuItem
-	mRefresh     *systray.MenuItem
-	mQuit        *systray.MenuItem
+	currentData UsageData
+	dataMutex   sync.RWMutex
+	mStatus     *systray.MenuItem
+	mEmail      *systray.MenuItem
+	mPlan       *systray.MenuItem
+	mExpiry     *systray.MenuItem
+	mReset      *systray.MenuItem
+	mAutostart  *systray.MenuItem
+	mRefresh    *systray.MenuItem
+	mQuit       *systray.MenuItem
 )
+
+// 使用 Go 默认 Transport；如果进程环境中设置了 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY，
+// 请求会自动沿用这些代理配置，并统一使用相同的请求超时。
+var apiHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 func findAuthJson() string {
 	candidates := []string{
@@ -195,12 +199,14 @@ func autoRefreshToken(info *AuthInfo) string {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	resp, err := apiHTTPClient.Do(req)
+	if err != nil || resp == nil {
 		return ""
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
 
 	var res map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
@@ -253,13 +259,16 @@ func fetchUsageData() UsageData {
 			auth.AccessToken = newTok
 		} else {
 			data.PercentageStr = "--"
-			data.ResetDetail = "未检测到本地凭据"
+			data.ResetDetail = "本地凭据缺失或已失效，请重新登录"
 			return data
 		}
 	}
 
 	makeReq := func(token string) (*http.Response, error) {
-		req, _ := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
+		req, err := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
+		if err != nil {
+			return nil, err
+		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
 		req.Header.Set("Accept", "application/json")
@@ -268,31 +277,52 @@ func fetchUsageData() UsageData {
 		if auth.AccountID != "" {
 			req.Header.Set("chatgpt-account-id", auth.AccountID)
 		}
-		client := &http.Client{Timeout: 9 * time.Second}
-		return client.Do(req)
+		return apiHTTPClient.Do(req)
 	}
 
 	resp, err := makeReq(auth.AccessToken)
-	if err != nil || (resp != nil && resp.StatusCode == 401) {
+	if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized {
+		_ = resp.Body.Close()
 		if newTok := autoRefreshToken(&auth); newTok != "" {
 			resp, err = makeReq(newTok)
+		} else {
+			data.ResetDetail = "登录凭据已过期或刷新失败，请重新登录"
+			return data
 		}
 	}
 
-	if err != nil || resp == nil || resp.StatusCode != 200 {
-		data.ResetDetail = "正在连接网络..."
+	if err != nil {
+		data.ResetDetail = networkErrorDetail(err)
+		return data
+	}
+	if resp == nil {
+		data.ResetDetail = "网络连接失败，请检查系统代理"
+		return data
+	}
+	if resp.StatusCode != http.StatusOK {
+		data.ResetDetail = httpStatusDetail(resp.StatusCode)
+		_ = resp.Body.Close()
 		return data
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		data.ResetDetail = "读取额度接口失败，请检查网络代理"
+		return data
+	}
 	var res map[string]interface{}
 	if err := json.Unmarshal(body, &res); err != nil {
+		data.ResetDetail = "额度接口返回格式异常"
 		return data
 	}
 
 	rateLimit, _ := res["rate_limit"].(map[string]interface{})
 	primary, _ := rateLimit["primary_window"].(map[string]interface{})
+	if primary == nil {
+		data.ResetDetail = "额度接口缺少 rate_limit 数据"
+		return data
+	}
 	usedPct, _ := primary["used_percent"].(float64)
 
 	pctVal := 100.0 - usedPct
@@ -326,6 +356,39 @@ func fetchUsageData() UsageData {
 	return data
 }
 
+func networkErrorDetail(err error) string {
+	if err == nil {
+		return "网络连接失败，请检查系统代理"
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "proxy") {
+		return "代理连接失败，请检查 HTTPS_PROXY/系统代理"
+	}
+	if strings.Contains(lower, "certificate") || strings.Contains(lower, "tls") {
+		return "TLS 证书连接失败，请检查系统时间或代理证书"
+	}
+	if len(msg) > 96 {
+		msg = msg[:96] + "..."
+	}
+	return "网络连接失败: " + msg
+}
+
+func httpStatusDetail(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "登录凭据已过期，请重新登录"
+	case http.StatusForbidden:
+		return "接口拒绝访问 (403)，请检查账号或代理"
+	case http.StatusTooManyRequests:
+		return "请求过于频繁，请稍后重试"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return fmt.Sprintf("服务暂时不可用 (%d)，请稍后重试", status)
+	default:
+		return fmt.Sprintf("额度接口返回 HTTP %d", status)
+	}
+}
+
 func generateTrayIcon(pct float64) []byte {
 	const size = 64
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
@@ -336,7 +399,7 @@ func generateTrayIcon(pct float64) []byte {
 	cx, cy := 32.0, 32.0
 	rOuter := 30.0
 	rInner := 23.0
-	cTrack := color.RGBA{28, 33, 46, 255}       // 暗灰底轨
+	cTrack := color.RGBA{28, 33, 46, 255}      // 暗灰底轨
 	cProgress := color.RGBA{56, 189, 248, 255} // 亮青蓝发光进度
 
 	// 1. 顺时针进度角度上限 (从 12 点钟 0° 开始)
@@ -419,8 +482,6 @@ func drawDigits(img *image.RGBA, s string, centerX, centerY int) {
 		curX += charW + spacing
 	}
 }
-
-
 
 func getAutostartDesktopPath() string {
 	home := os.Getenv("HOME")

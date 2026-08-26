@@ -1,23 +1,26 @@
 @echo off
-chcp 65001 >nul
-echo 🚀 正在构建 Windows 原生 CodexMonitor.exe ...
+setlocal
+echo [BUILD] Building Windows CodexMonitor.exe ...
 
 set "CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-if not exist "%CSC%" (
-    set "CSC=C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
-)
+if exist "%CSC%" goto compiler_ready
+set "CSC=C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+if exist "%CSC%" goto compiler_ready
+echo [ERROR] .NET Framework compiler (csc.exe) was not found.
+pause
+exit /b 1
 
-if not exist "%CSC%" (
-    echo ❌ 错误: 未找到 .NET Framework 4.0/4.8 编译器 (csc.exe)
-    pause
-    exit /b 1
-)
+:compiler_ready
 
 "%CSC%" /nologo /t:winexe /o+ /platform:anycpu /nowarn:0618 /lib:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll /r:System.Xaml.dll /r:WindowsBase.dll /r:PresentationCore.dll /r:PresentationFramework.dll /out:CodexMonitor.exe src\*.cs
 
-if %ERRORLEVEL% equ 0 (
-    echo ✅ 构建成功: CodexMonitor.exe
-) else (
-    echo ❌ 构建失败，请检查上方错误提示。
-)
+if errorlevel 1 goto build_failed
+echo [OK] Build succeeded: CodexMonitor.exe
+goto build_done
+
+:build_failed
+echo [ERROR] Build failed. See the compiler output above.
+
+:build_done
 pause
+endlocal

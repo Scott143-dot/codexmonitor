@@ -18,6 +18,8 @@ namespace CodexMonitor
         public double Dist { get; set; }
         public List<Point> MainLine { get; set; }
         public List<List<Point>> TendrilLines { get; set; }
+        public StreamGeometry MainGeometry { get; set; }
+        public List<StreamGeometry> TendrilGeometries { get; set; }
         public bool IsMain { get; set; }
     }
 
@@ -43,6 +45,9 @@ namespace CodexMonitor
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SWP_SHOWWINDOW = 0x0040;
+        private const double BoundsPadding = 52.0;
+        private const double OverlayReserve = 96.0;
+        private const double MinOverlaySize = 160.0;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
@@ -53,6 +58,9 @@ namespace CodexMonitor
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+        [DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr hWnd);
+
         public string TrailMode { get; set; }
         public string ColorTheme { get; set; }
 
@@ -62,11 +70,30 @@ namespace CodexMonitor
         private readonly object _lock = new object();
         private Point? _lastPt;
         private double _accumDist;
+        private DateTime _lastAcceptedPointAt = DateTime.MinValue;
         private IntPtr _hwnd = IntPtr.Zero;
+        private double _dpiScale = 1.0;
+        private double _physicalLeft;
+        private double _physicalTop;
+        private double _physicalWidth;
+        private double _physicalHeight;
+        private const double MinPointIntervalMs = 8.0;
 
         private static readonly SolidColorBrush TransBrush = Brushes.Transparent;
 
         private bool _isRenderingActive = false;
+        private const int FadeBucketCount = 24;
+        private string _cachedTheme;
+        private readonly Pen[] _laserGlowMainPens = new Pen[FadeBucketCount];
+        private readonly Pen[] _laserGlowSubPens = new Pen[FadeBucketCount];
+        private readonly Pen[] _laserCoreMainPens = new Pen[FadeBucketCount];
+        private readonly Pen[] _laserCoreSubPens = new Pen[FadeBucketCount];
+        private readonly Pen[] _cometOuterPens = new Pen[FadeBucketCount];
+        private readonly Pen[] _cometMidPens = new Pen[FadeBucketCount];
+        private readonly Pen[,] _cometTendrilPens = new Pen[5, FadeBucketCount];
+        private readonly Pen[,] _rainbowPens = new Pen[6, FadeBucketCount];
+        private readonly SolidColorBrush[] _cyanParticleBrushes = new SolidColorBrush[FadeBucketCount];
+        private readonly SolidColorBrush[] _yellowParticleBrushes = new SolidColorBrush[FadeBucketCount];
 
         public TrailOverlay()
         {
@@ -78,24 +105,98 @@ namespace CodexMonitor
             Background = TransBrush;
             ShowInTaskbar = false;
             Topmost = true;
+            ShowActivated = false;
+            WindowStartupLocation = WindowStartupLocation.Manual;
 
-            UpdateBounds();
+            // 尾迹只需要覆盖当前轨迹附近的区域。原实现覆盖整个虚拟桌面，
+            // 在双屏/混合 DPI 下既容易产生偏移，也会让透明窗口每帧重绘数千像素。
+            Left = 0;
+            Top = 0;
+            Width = MinOverlaySize;
+            Height = MinOverlaySize;
+            _physicalWidth = MinOverlaySize;
+            _physicalHeight = MinOverlaySize;
         }
 
-        public void UpdateBounds()
+        private static readonly Color[] RainbowColors =
         {
-            double vLeft = SystemParameters.VirtualScreenLeft;
-            double vTop = SystemParameters.VirtualScreenTop;
-            double vWidth = SystemParameters.VirtualScreenWidth;
-            double vHeight = SystemParameters.VirtualScreenHeight;
+            Color.FromRgb(244, 63, 94),
+            Color.FromRgb(251, 146, 60),
+            Color.FromRgb(250, 204, 21),
+            Color.FromRgb(52, 211, 153),
+            Color.FromRgb(56, 189, 248),
+            Color.FromRgb(168, 85, 247)
+        };
 
-            if (Math.Abs(Left - vLeft) > 0.5 || Math.Abs(Top - vTop) > 0.5 ||
-                Math.Abs(Width - vWidth) > 0.5 || Math.Abs(Height - vHeight) > 0.5)
+        private static int GetFadeBucket(double ratio)
+        {
+            if (ratio <= 0.01) return 0;
+            int bucket = (int)Math.Round(Math.Min(1.0, ratio) * (FadeBucketCount - 1));
+            return Math.Max(1, Math.Min(FadeBucketCount - 1, bucket));
+        }
+
+        private static double GetBucketRatio(int bucket)
+        {
+            return (double)bucket / (FadeBucketCount - 1);
+        }
+
+        private static Pen CreateCachedPen(Color color, byte alpha, double width, bool roundedJoin)
+        {
+            var brush = new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
+            brush.Freeze();
+            var pen = new Pen(brush, width)
             {
-                Left = vLeft;
-                Top = vTop;
-                Width = vWidth;
-                Height = vHeight;
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round
+            };
+            if (roundedJoin) pen.LineJoin = PenLineJoin.Round;
+            pen.Freeze();
+            return pen;
+        }
+
+        private void EnsureRenderCaches()
+        {
+            if (_cachedTheme == ColorTheme && _laserGlowMainPens[1] != null) return;
+
+            _cachedTheme = ColorTheme;
+            Color mainColor = Color.FromRgb(56, 189, 248);
+            if (ColorTheme == "emerald") mainColor = Color.FromRgb(45, 212, 191);
+            else if (ColorTheme == "mono") mainColor = Color.FromRgb(255, 255, 255);
+
+            for (int bucket = 0; bucket < FadeBucketCount; bucket++)
+            {
+                double ratio = GetBucketRatio(bucket);
+                byte mainAlpha = (byte)(ratio * 240);
+                byte subAlpha = (byte)(ratio * 150);
+                _laserGlowMainPens[bucket] = CreateCachedPen(mainColor, (byte)(mainAlpha * 0.45), 5.5 * ratio + 0.8, true);
+                _laserGlowSubPens[bucket] = CreateCachedPen(mainColor, (byte)(subAlpha * 0.45), 3.0 * ratio + 0.8, true);
+                _laserCoreMainPens[bucket] = CreateCachedPen(Color.FromRgb(255, 255, 255), mainAlpha, 2.0 * ratio + 0.4, true);
+                _laserCoreSubPens[bucket] = CreateCachedPen(Color.FromRgb(255, 255, 255), subAlpha, 1.0 * ratio + 0.4, true);
+
+                _cometOuterPens[bucket] = CreateCachedPen(Color.FromRgb(50, 58, 70), (byte)(38 * ratio), 38.0 * ratio + 2.0, false);
+                _cometMidPens[bucket] = CreateCachedPen(Color.FromRgb(30, 36, 46), (byte)(75 * ratio), 20.0 * ratio + 1.2, false);
+
+                for (int strand = 0; strand < 5; strand++)
+                {
+                    Color strandColor = strand == 3 ? Color.FromRgb(20, 25, 32) : Color.FromRgb(45, 55, 68);
+                    byte strandAlpha = (byte)((strand == 3 ? 130 : 70) * ratio);
+                    _cometTendrilPens[strand, bucket] = CreateCachedPen(strandColor, strandAlpha,
+                        (strand == 3 ? 2.2 : 1.4) * ratio + 0.3, true);
+                }
+
+                for (int colorIndex = 0; colorIndex < RainbowColors.Length; colorIndex++)
+                {
+                    _rainbowPens[colorIndex, bucket] = CreateCachedPen(RainbowColors[colorIndex], (byte)(220 * ratio),
+                        2.8 * ratio + 0.6, true);
+                }
+
+                byte particleAlpha = (byte)(ratio * 240);
+                var cyanBrush = new SolidColorBrush(Color.FromArgb(particleAlpha, 56, 189, 248));
+                cyanBrush.Freeze();
+                _cyanParticleBrushes[bucket] = cyanBrush;
+                var yellowBrush = new SolidColorBrush(Color.FromArgb(particleAlpha, 250, 204, 21));
+                yellowBrush.Freeze();
+                _yellowParticleBrushes[bucket] = yellowBrush;
             }
         }
 
@@ -114,7 +215,21 @@ namespace CodexMonitor
             _hwnd = new WindowInteropHelper(this).Handle;
             int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
             SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+            UpdateDpiScale();
             EnsureTopmost();
+        }
+
+        private void UpdateDpiScale()
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                try
+                {
+                    uint dpi = GetDpiForWindow(_hwnd);
+                    if (dpi > 0) _dpiScale = dpi / 96.0;
+                }
+                catch { }
+            }
         }
 
         public void EnsureTopmost()
@@ -127,28 +242,34 @@ namespace CodexMonitor
 
         public void AddPoint(Point screenPt)
         {
-            UpdateBounds();
-            // 将虚拟屏幕全局坐标精准映射至 TrailOverlay 的局部绘图坐标系 (解决多屏/负坐标偏移)
-            Point pt = new Point(screenPt.X - Left, screenPt.Y - Top);
-
             lock (_lock)
             {
-                var now = DateTime.Now;
+                var now = DateTime.UtcNow;
                 EnsureRenderingActive();
+
+                // 鼠标硬件采样率可能远高于屏幕刷新率。拖动时只接受约 125Hz
+                // 的采样，避免每个 WM_MOUSEMOVE 都同步生成几何和调整尾迹窗口。
+                if (_lastPt.HasValue && (now - _lastAcceptedPointAt).TotalMilliseconds < MinPointIntervalMs)
+                {
+                    return;
+                }
+                _lastAcceptedPointAt = now;
 
                 if (!_lastPt.HasValue)
                 {
-                    _lastPt = pt;
+                    _lastPt = screenPt;
+                    RefreshOverlayBoundsUnsafe(screenPt);
                     return;
                 }
 
-                double dX = pt.X - _lastPt.Value.X;
-                double dY = pt.Y - _lastPt.Value.Y;
+                double dX = screenPt.X - _lastPt.Value.X;
+                double dY = screenPt.Y - _lastPt.Value.Y;
                 double dist = Math.Sqrt(dX * dX + dY * dY);
                 if (dist < 1.0) return;
 
                 _accumDist += dist;
-                double triggerDist = (TrailMode == "laser") ? 16.0 : ((TrailMode == "comet") ? 11.0 : 12.0);
+                double triggerDistDip = (TrailMode == "laser") ? 16.0 : ((TrailMode == "comet") ? 11.0 : 12.0);
+                double triggerDist = triggerDistDip * _dpiScale;
 
                 if (_accumDist >= triggerDist)
                 {
@@ -168,12 +289,13 @@ namespace CodexMonitor
 
                     if (TrailMode == "laser")
                     {
-                        var mainPts = GenerateFractalPath(_lastPt.Value, pt, 2, 12.0);
+                        var mainPts = GenerateFractalPath(_lastPt.Value, screenPt, 2, 12.0);
                         _segments.Add(new RibbonSegment
                         {
                             P1 = _lastPt.Value,
-                            P2 = pt,
+                            P2 = screenPt,
                             MainLine = mainPts,
+                            MainGeometry = BuildGeometry(mainPts),
                             CreatedT = now,
                             Life = 0.65,
                             IsMain = true
@@ -181,13 +303,14 @@ namespace CodexMonitor
 
                         double sign = _rand.Next(2) == 0 ? 1.0 : -1.0;
                         var pSub1 = new Point(_lastPt.Value.X + nx * sign * 5.0, _lastPt.Value.Y + ny * sign * 5.0);
-                        var pSub2 = new Point(pt.X + nx * sign * 8.0, pt.Y + ny * sign * 8.0);
+                        var pSub2 = new Point(screenPt.X + nx * sign * 8.0, screenPt.Y + ny * sign * 8.0);
                         var subPts = GenerateFractalPath(pSub1, pSub2, 2, 12.0);
                         _segments.Add(new RibbonSegment
                         {
                             P1 = pSub1,
                             P2 = pSub2,
                             MainLine = subPts,
+                            MainGeometry = BuildGeometry(subPts),
                             CreatedT = now,
                             Life = 0.5,
                             IsMain = false
@@ -199,8 +322,8 @@ namespace CodexMonitor
                             double ang = _rand.NextDouble() * Math.PI * 2;
                             _particles.Add(new VisualParticle
                             {
-                                X = pt.X,
-                                Y = pt.Y,
+                                X = screenPt.X,
+                                Y = screenPt.Y,
                                 Vx = Math.Cos(ang) * spd,
                                 Vy = Math.Sin(ang) * spd,
                                 Life = _rand.NextDouble() * 0.3 + 0.2,
@@ -220,18 +343,19 @@ namespace CodexMonitor
                             double offset1 = (_rand.NextDouble() * 20.0 - 10.0);
                             double offset2 = (_rand.NextDouble() * 20.0 - 10.0);
                             var p1 = new Point(_lastPt.Value.X + nx * offset1, _lastPt.Value.Y + ny * offset1);
-                            var p2 = new Point(pt.X + nx * offset2, pt.Y + ny * offset2);
+                            var p2 = new Point(screenPt.X + nx * offset2, screenPt.Y + ny * offset2);
                             swirlingLines.Add(GenerateFractalPath(p1, p2, 2, 5.0));
                         }
 
                         _segments.Add(new RibbonSegment
                         {
                             P1 = _lastPt.Value,
-                            P2 = pt,
+                            P2 = screenPt,
                             Nx = nx,
                             Ny = ny,
                             Dist = dist,
                             TendrilLines = swirlingLines,
+                            TendrilGeometries = BuildGeometries(swirlingLines),
                             CreatedT = now,
                             Life = 0.75,
                             IsMain = true
@@ -245,15 +369,16 @@ namespace CodexMonitor
                             double o1 = (_rand.NextDouble() * 22.0 - 11.0);
                             double o2 = (_rand.NextDouble() * 22.0 - 11.0);
                             var p1 = new Point(_lastPt.Value.X + nx * o1, _lastPt.Value.Y + ny * o1);
-                            var p2 = new Point(pt.X + nx * o2, pt.Y + ny * o2);
+                            var p2 = new Point(screenPt.X + nx * o2, screenPt.Y + ny * o2);
                             ribbons.Add(GenerateFractalPath(p1, p2, 2, 6.0));
                         }
 
                         _segments.Add(new RibbonSegment
                         {
                             P1 = _lastPt.Value,
-                            P2 = pt,
+                            P2 = screenPt,
                             TendrilLines = ribbons,
+                            TendrilGeometries = BuildGeometries(ribbons),
                             CreatedT = now,
                             Life = 0.75,
                             IsMain = true
@@ -263,8 +388,8 @@ namespace CodexMonitor
                         double ang = _rand.NextDouble() * Math.PI * 2;
                         _particles.Add(new VisualParticle
                         {
-                            X = pt.X + nx * (_rand.NextDouble() * 16.0 - 8.0),
-                            Y = pt.Y + ny * (_rand.NextDouble() * 16.0 - 8.0),
+                            X = screenPt.X + nx * (_rand.NextDouble() * 16.0 - 8.0),
+                            Y = screenPt.Y + ny * (_rand.NextDouble() * 16.0 - 8.0),
                             Vx = Math.Cos(ang) * spd,
                             Vy = Math.Sin(ang) * spd,
                             Life = _rand.NextDouble() * 0.35 + 0.2,
@@ -274,9 +399,120 @@ namespace CodexMonitor
                         });
                     }
 
-                    _lastPt = pt;
+                    _lastPt = screenPt;
+                    RefreshOverlayBoundsUnsafe(screenPt);
                 }
             }
+        }
+
+        private static StreamGeometry BuildGeometry(List<Point> points)
+        {
+            var geometry = new StreamGeometry();
+            using (var ctx = geometry.Open())
+            {
+                ctx.BeginFigure(points[0], false, false);
+                ctx.PolyLineTo(points.GetRange(1, points.Count - 1), true, true);
+            }
+            geometry.Freeze();
+            return geometry;
+        }
+
+        private static List<StreamGeometry> BuildGeometries(List<List<Point>> lines)
+        {
+            var geometries = new List<StreamGeometry>(lines.Count);
+            foreach (var line in lines)
+            {
+                geometries.Add(line != null && line.Count >= 2 ? BuildGeometry(line) : null);
+            }
+            return geometries;
+        }
+
+        private void RefreshOverlayBoundsUnsafe(Point latestPoint)
+        {
+            double minX = latestPoint.X;
+            double minY = latestPoint.Y;
+            double maxX = latestPoint.X;
+            double maxY = latestPoint.Y;
+
+            Action<Point> include = p =>
+            {
+                minX = Math.Min(minX, p.X);
+                minY = Math.Min(minY, p.Y);
+                maxX = Math.Max(maxX, p.X);
+                maxY = Math.Max(maxY, p.Y);
+            };
+
+            foreach (var segment in _segments)
+            {
+                include(segment.P1);
+                include(segment.P2);
+                if (segment.MainLine != null)
+                {
+                    foreach (var p in segment.MainLine) include(p);
+                }
+                if (segment.TendrilLines != null)
+                {
+                    foreach (var line in segment.TendrilLines)
+                    {
+                        if (line == null) continue;
+                        foreach (var p in line) include(p);
+                    }
+                }
+            }
+
+            foreach (var particle in _particles)
+            {
+                include(new Point(particle.X, particle.Y));
+            }
+
+            double contentPadding = BoundsPadding * _dpiScale;
+            double requiredLeft = minX - contentPadding;
+            double requiredTop = minY - contentPadding;
+            double requiredRight = maxX + contentPadding;
+            double requiredBottom = maxY + contentPadding;
+
+            // 保留一圈缓冲区，只有轨迹接近窗口边缘时才移动/缩放 HWND。
+            // 拖动事件可能每几毫秒触发一次，避免每个 segment 都调用 SetWindowPos。
+            bool alreadyCovered = _physicalWidth > 0 && _physicalHeight > 0 &&
+                requiredLeft >= _physicalLeft && requiredTop >= _physicalTop &&
+                requiredRight <= _physicalLeft + _physicalWidth &&
+                requiredBottom <= _physicalTop + _physicalHeight;
+            if (alreadyCovered) return;
+
+            double padding = (BoundsPadding + OverlayReserve) * _dpiScale;
+            double left = minX - padding;
+            double top = minY - padding;
+            double width = Math.Max(MinOverlaySize * _dpiScale, maxX - minX + padding * 2.0);
+            double height = Math.Max(MinOverlaySize * _dpiScale, maxY - minY + padding * 2.0);
+
+            SetPhysicalBoundsUnsafe(left, top, width, height);
+        }
+
+        private void SetPhysicalBoundsUnsafe(double left, double top, double width, double height)
+        {
+            _physicalLeft = left;
+            _physicalTop = top;
+            _physicalWidth = width;
+            _physicalHeight = height;
+
+            if (_hwnd == IntPtr.Zero)
+            {
+                Left = left / _dpiScale;
+                Top = top / _dpiScale;
+                Width = width / _dpiScale;
+                Height = height / _dpiScale;
+                return;
+            }
+
+            // SetWindowPos 使用真实桌面物理像素，绕开 WPF 在不同 DPI 显示器间的
+            // 逻辑坐标换算；尾迹内容再在 OnRender 中用当前窗口 DPI 转回 DIP。
+            Width = width / _dpiScale;
+            Height = height / _dpiScale;
+            SetWindowPos(_hwnd, HWND_TOPMOST,
+                (int)Math.Round(left), (int)Math.Round(top),
+                Math.Max(1, (int)Math.Round(width)), Math.Max(1, (int)Math.Round(height)),
+                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            UpdateDpiScale();
         }
 
         public void ResetLastPoint()
@@ -285,6 +521,7 @@ namespace CodexMonitor
             {
                 _lastPt = null;
                 _accumDist = 0.0;
+                _lastAcceptedPointAt = DateTime.MinValue;
             }
         }
 
@@ -326,7 +563,7 @@ namespace CodexMonitor
             bool hasActiveVisuals = false;
             lock (_lock)
             {
-                var now = DateTime.Now;
+                var now = DateTime.UtcNow;
                 _segments.RemoveAll(s => (now - s.CreatedT).TotalSeconds >= s.Life);
 
                 for (int i = _particles.Count - 1; i >= 0; i--)
@@ -362,21 +599,34 @@ namespace CodexMonitor
             lock (_lock)
             {
                 if (_segments.Count == 0 && _particles.Count == 0) return;
-                var now = DateTime.Now;
-
-                if (TrailMode == "laser")
+                var now = DateTime.UtcNow;
+                EnsureRenderCaches();
+                // 段和粒子保存的是真实桌面物理坐标；局部窗口只负责附近的绘制。
+                // 这一步让负坐标、不同缩放比例的双屏都使用同一坐标系。
+                double invDpi = 1.0 / _dpiScale;
+                var matrix = new Matrix(invDpi, 0, 0, invDpi,
+                    -_physicalLeft * invDpi, -_physicalTop * invDpi);
+                dc.PushTransform(new MatrixTransform(matrix));
+                try
                 {
-                    RenderPlasmaLightning(dc, now);
-                    RenderParticles(dc, now);
+                    if (TrailMode == "laser")
+                    {
+                        RenderPlasmaLightning(dc, now);
+                        RenderParticles(dc, now);
+                    }
+                    else if (TrailMode == "comet")
+                    {
+                        RenderFluidBraidedInkWash(dc, now); // 纯粹水墨：100% 顺滑、0 平行线、0 黑点
+                    }
+                    else if (TrailMode == "rainbow")
+                    {
+                        RenderChaoticBraidedRainbow(dc, now);
+                        RenderParticles(dc, now);
+                    }
                 }
-                else if (TrailMode == "comet")
+                finally
                 {
-                    RenderFluidBraidedInkWash(dc, now); // 纯粹水墨：100% 顺滑、0 平行线、0 黑点
-                }
-                else if (TrailMode == "rainbow")
-                {
-                    RenderChaoticBraidedRainbow(dc, now);
-                    RenderParticles(dc, now);
+                    dc.Pop();
                 }
             }
         }
@@ -388,9 +638,11 @@ namespace CodexMonitor
                 double prog = 1.0 - (now - spk.Born).TotalSeconds / spk.Life;
                 if (prog > 0)
                 {
-                    byte alpha = (byte)(prog * 240);
-                    var brush = new SolidColorBrush(Color.FromArgb(alpha, spk.ParticleColor.R, spk.ParticleColor.G, spk.ParticleColor.B));
-                    brush.Freeze();
+                    int bucket = GetFadeBucket(prog);
+                    if (bucket == 0) continue;
+                    var brush = spk.ParticleColor.R > 200
+                        ? _yellowParticleBrushes[bucket]
+                        : _cyanParticleBrushes[bucket];
                     double sz = spk.Size * prog;
                     dc.DrawEllipse(brush, null, new Point(spk.X, spk.Y), sz, sz);
                 }
@@ -400,50 +652,19 @@ namespace CodexMonitor
         // ==================== 1. 闪电 (裂空电弧) ====================
         private void RenderPlasmaLightning(DrawingContext dc, DateTime now)
         {
-            Color mainColor = Color.FromRgb(56, 189, 248);
-            if (ColorTheme == "emerald") mainColor = Color.FromRgb(45, 212, 191);
-            else if (ColorTheme == "mono") mainColor = Color.FromRgb(255, 255, 255);
-
             foreach (var seg in _segments)
             {
                 if (seg.MainLine == null || seg.MainLine.Count < 2) continue;
                 double age = (now - seg.CreatedT).TotalSeconds;
                 double ratio = Math.Max(0.0, 1.0 - (age / seg.Life));
-                if (ratio <= 0.01) continue;
+                int bucket = GetFadeBucket(ratio);
+                if (bucket == 0) continue;
 
-                byte alpha = (byte)(ratio * (seg.IsMain ? 240 : 150));
-                byte glowAlpha = (byte)(alpha * 0.45);
+                var glowPen = seg.IsMain ? _laserGlowMainPens[bucket] : _laserGlowSubPens[bucket];
+                var corePen = seg.IsMain ? _laserCoreMainPens[bucket] : _laserCoreSubPens[bucket];
 
-                double glowW = (seg.IsMain ? 5.5 : 3.0) * ratio + 0.8;
-                double coreW = (seg.IsMain ? 2.0 : 1.0) * ratio + 0.4;
-
-                var glowBrush = new SolidColorBrush(Color.FromArgb(glowAlpha, mainColor.R, mainColor.G, mainColor.B));
-                glowBrush.Freeze();
-                var glowPen = new Pen(glowBrush, glowW)
-                {
-                    StartLineCap = PenLineCap.Round,
-                    EndLineCap = PenLineCap.Round,
-                    LineJoin = PenLineJoin.Round
-                };
-                glowPen.Freeze();
-
-                var coreBrush = new SolidColorBrush(Color.FromArgb(alpha, 255, 255, 255));
-                coreBrush.Freeze();
-                var corePen = new Pen(coreBrush, coreW)
-                {
-                    StartLineCap = PenLineCap.Round,
-                    EndLineCap = PenLineCap.Round,
-                    LineJoin = PenLineJoin.Round
-                };
-                corePen.Freeze();
-
-                var geo = new StreamGeometry();
-                using (var ctx = geo.Open())
-                {
-                    ctx.BeginFigure(seg.MainLine[0], false, false);
-                    ctx.PolyLineTo(seg.MainLine.GetRange(1, seg.MainLine.Count - 1), true, true);
-                }
-                geo.Freeze();
+                var geo = seg.MainGeometry;
+                if (geo == null) continue;
 
                 dc.DrawGeometry(null, glowPen, geo);
                 dc.DrawGeometry(null, corePen, geo);
@@ -457,28 +678,15 @@ namespace CodexMonitor
             {
                 double age = (now - seg.CreatedT).TotalSeconds;
                 double ratio = Math.Max(0.0, 1.0 - (age / seg.Life));
-                if (ratio <= 0.01) continue;
+                int bucket = GetFadeBucket(ratio);
+                if (bucket == 0) continue;
 
-                // ① 底层大面积柔和浅灰水墨烟雾 (宽 38px，极度通透羽化)
-                byte outerWashA = (byte)(38 * ratio);
-                var outerWashPen = new Pen(new SolidColorBrush(Color.FromArgb(outerWashA, 50, 58, 70)), 38.0 * ratio + 2.0)
-                {
-                    StartLineCap = PenLineCap.Round,
-                    EndLineCap = PenLineCap.Round
-                };
-                outerWashPen.Brush.Freeze();
-                outerWashPen.Freeze();
+                // ① 底层大面积柔和浅灰水墨烟雾
+                var outerWashPen = _cometOuterPens[bucket];
                 dc.DrawLine(outerWashPen, seg.P1, seg.P2);
 
-                // 中层玄青墨晕 (宽 20px)
-                byte midWashA = (byte)(75 * ratio);
-                var midWashPen = new Pen(new SolidColorBrush(Color.FromArgb(midWashA, 30, 36, 46)), 20.0 * ratio + 1.2)
-                {
-                    StartLineCap = PenLineCap.Round,
-                    EndLineCap = PenLineCap.Round
-                };
-                midWashPen.Brush.Freeze();
-                midWashPen.Freeze();
+                // 中层玄青墨晕
+                var midWashPen = _cometMidPens[bucket];
                 dc.DrawLine(midWashPen, seg.P1, seg.P2);
 
                 // ② 7 束相互交织缠绕、波浪穿插的自然墨丝 (绝非平行死板排列！)
@@ -489,27 +697,11 @@ namespace CodexMonitor
                         var line = seg.TendrilLines[s];
                         if (line == null || line.Count < 2) continue;
 
-                        var sGeo = new StreamGeometry();
-                        using (var ctx = sGeo.Open())
-                        {
-                            ctx.BeginFigure(line[0], false, false);
-                            ctx.PolyLineTo(line.GetRange(1, line.Count - 1), true, true);
-                        }
-                        sGeo.Freeze();
+                        if (seg.TendrilGeometries == null || s >= seg.TendrilGeometries.Count) continue;
+                        var sGeo = seg.TendrilGeometries[s];
+                        if (sGeo == null) continue;
 
-                        // 墨丝深浅有致：主丝稍浓 (深灰 130)，副丝轻盈 (浅灰 60)
-                        byte sAlpha = (byte)((s == 3 ? 130 : 70) * ratio);
-                        Color sColor = (s == 3) ? Color.FromRgb(20, 25, 32) : Color.FromRgb(45, 55, 68);
-
-                        var sPen = new Pen(new SolidColorBrush(Color.FromArgb(sAlpha, sColor.R, sColor.G, sColor.B)), (s == 3 ? 2.2 : 1.4) * ratio + 0.3)
-                        {
-                            StartLineCap = PenLineCap.Round,
-                            EndLineCap = PenLineCap.Round,
-                            LineJoin = PenLineJoin.Round
-                        };
-                        sPen.Brush.Freeze();
-                        sPen.Freeze();
-                        dc.DrawGeometry(null, sPen, sGeo);
+                        dc.DrawGeometry(null, _cometTendrilPens[Math.Min(4, s), bucket], sGeo);
                     }
                 }
             }
@@ -518,44 +710,23 @@ namespace CodexMonitor
         // ==================== 3. 混沌极光 (完全交织缠绕 · 告别平行排布) ====================
         private void RenderChaoticBraidedRainbow(DrawingContext dc, DateTime now)
         {
-            var colors = new[]
-            {
-                Color.FromRgb(244, 63, 94),   // 玫瑰红
-                Color.FromRgb(251, 146, 60),  // 琥珀橙
-                Color.FromRgb(250, 204, 21),  // 荧光金
-                Color.FromRgb(52, 211, 153),  // 极光翡翠绿
-                Color.FromRgb(56, 189, 248),  // 冰海冷蓝
-                Color.FromRgb(168, 85, 247)   // 霓虹紫
-            };
-
             foreach (var seg in _segments)
             {
                 double age = (now - seg.CreatedT).TotalSeconds;
                 double ratio = Math.Max(0.0, 1.0 - (age / seg.Life));
-                if (ratio <= 0.01 || seg.TendrilLines == null) continue;
+                int bucket = GetFadeBucket(ratio);
+                if (bucket == 0 || seg.TendrilLines == null) continue;
 
-                for (int i = 0; i < Math.Min(colors.Length, seg.TendrilLines.Count); i++)
+                for (int i = 0; i < Math.Min(RainbowColors.Length, seg.TendrilLines.Count); i++)
                 {
                     var line = seg.TendrilLines[i];
                     if (line == null || line.Count < 2) continue;
 
-                    var rGeo = new StreamGeometry();
-                    using (var ctx = rGeo.Open())
-                    {
-                        ctx.BeginFigure(line[0], false, false);
-                        ctx.PolyLineTo(line.GetRange(1, line.Count - 1), true, true);
-                    }
-                    rGeo.Freeze();
+                    if (seg.TendrilGeometries == null || i >= seg.TendrilGeometries.Count) continue;
+                    var rGeo = seg.TendrilGeometries[i];
+                    if (rGeo == null) continue;
 
-                    var pen = new Pen(new SolidColorBrush(Color.FromArgb((byte)(220 * ratio), colors[i].R, colors[i].G, colors[i].B)), 2.8 * ratio + 0.6)
-                    {
-                        StartLineCap = PenLineCap.Round,
-                        EndLineCap = PenLineCap.Round,
-                        LineJoin = PenLineJoin.Round
-                    };
-                    pen.Brush.Freeze();
-                    pen.Freeze();
-                    dc.DrawGeometry(null, pen, rGeo);
+                    dc.DrawGeometry(null, _rainbowPens[i, bucket], rGeo);
                 }
             }
         }

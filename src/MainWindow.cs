@@ -22,8 +22,30 @@ namespace CodexMonitor
         [DllImport("user32.dll")]
         private static extern bool GetCursorPos(out POINT lpPoint);
 
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int X; public int Y; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_SHOWWINDOW = 0x0040;
+        private const int SM_XVIRTUALSCREEN = 76;
+        private const int SM_YVIRTUALSCREEN = 77;
+        private const int SM_CXVIRTUALSCREEN = 78;
+        private const int SM_CYVIRTUALSCREEN = 79;
 
         private const double CanvasW = 72.0;
         private const double CanvasH = 96.0;
@@ -59,10 +81,16 @@ namespace CodexMonitor
         private DateTime _menuLeaveStart;
 
         private readonly DispatcherTimer _morphTimer;
+        private readonly DispatcherTimer _topmostTimer;
         private double _morphStartVal;
         private double _morphTargetVal;
         private DateTime _morphStartTime;
         private const double MorphDurationMs = 150.0;
+
+        private IntPtr _hwnd = IntPtr.Zero;
+        private Rect _virtualDesktopBoundsCache;
+        private DateTime _virtualDesktopBoundsCachedAt = DateTime.MinValue;
+        private const double VirtualBoundsCacheMs = 250.0;
 
         private Popup _infoPopup;
         private TextBlock _infoText;
@@ -91,31 +119,28 @@ namespace CodexMonitor
             Width = CanvasW;
             Height = CanvasH;
 
-            double vLeft = SystemParameters.VirtualScreenLeft;
-            double vTop = SystemParameters.VirtualScreenTop;
-            double vRight = vLeft + SystemParameters.VirtualScreenWidth;
-            double vBottom = vTop + SystemParameters.VirtualScreenHeight;
-
             double posX = _config.pos_x;
             double posY = _config.pos_y;
-            if (posX < vLeft || posX > (vRight - Width)) posX = SystemParameters.WorkArea.Left + 120;
-            if (posY < vTop || posY > (vBottom - Height)) posY = SystemParameters.WorkArea.Top + 120;
+            // 不在 HWND 创建前用 SystemParameters.VirtualScreen* 判断位置：
+            // 混合 DPI 双屏下它可能采用主屏逻辑坐标，反而会把副屏配置误判为越界。
+            if (Math.Abs(posX) > 100000.0 || Math.Abs(posY) > 100000.0)
+            {
+                posX = SystemParameters.WorkArea.Left + 120;
+                posY = SystemParameters.WorkArea.Top + 120;
+            }
             Left = posX;
             Top = posY;
-
-            if (_isDocked)
-            {
-                var scr = GetCurrentScreenBounds(Left, Top);
-                if (Left <= scr.Left + 60) { _dockSide = "left"; Left = scr.Left; }
-                else if (Left + Width >= scr.Right - 60) { _dockSide = "right"; Left = scr.Right - CanvasW; }
-                else { _dockSide = "left"; Left = scr.Left; }
-            }
 
             _morphTimer = new DispatcherTimer(DispatcherPriority.Render)
             {
                 Interval = TimeSpan.FromMilliseconds(10)
             };
             _morphTimer.Tick += OnMorphTimerTick;
+
+            // 其它置顶窗口、全屏应用或系统窗口可能在运行期间改变 Z 序。
+            // 每秒只做一次无激活的 Win32 校正，避免磁吸后悬浮球逐渐掉到普通窗口下面。
+            _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _topmostTimer.Tick += (s, e) => EnsureTopmost();
 
             InitInfoPopup();
 
@@ -156,7 +181,93 @@ namespace CodexMonitor
             _autoSyncTimer.Tick += (s, e) => DoRefreshQuota();
             _autoSyncTimer.Start();
 
-            Loaded += (s, e) => DoRefreshQuota();
+            Loaded += (s, e) =>
+            {
+                if (_isDocked) NormalizeDockedPosition();
+                else NormalizeFreePosition();
+                EnsureTopmost();
+                _topmostTimer.Start();
+                DoRefreshQuota();
+            };
+            Closed += (s, e) =>
+            {
+                _topmostTimer.Stop();
+                _hoverTimer.Stop();
+                _autoSyncTimer.Stop();
+                if (_menuAutoCloseTimer != null) _menuAutoCloseTimer.Stop();
+                if (_trayIcon != null) _trayIcon.Dispose();
+            };
+        }
+
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            _hwnd = new WindowInteropHelper(this).Handle;
+            EnsureTopmost();
+        }
+
+        private void EnsureTopmost()
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+
+            // 尾迹窗口必须在悬浮球之上，但不能抢焦点。
+            if (_trail != null) _trail.EnsureTopmost();
+        }
+
+        private void NormalizeDockedPosition()
+        {
+            if (!_isDocked) return;
+
+            var scr = GetCurrentScreenBounds(Left, Top);
+            if (_dockSide == "right" || Left + Width >= scr.Right - 60)
+            {
+                _dockSide = "right";
+                Left = scr.Right - CanvasW;
+            }
+            else
+            {
+                _dockSide = "left";
+                Left = scr.Left;
+            }
+
+            _config.dock_side = _dockSide;
+            _config.pos_x = (int)Left;
+            _config.pos_y = (int)Top;
+            ConfigManager.Save(_config);
+        }
+
+        private void NormalizeFreePosition()
+        {
+            if (_hwnd == IntPtr.Zero) return;
+
+            RECT rect;
+            if (!GetWindowRect(_hwnd, out rect)) return;
+
+            var widgetRect = new System.Drawing.Rectangle(rect.Left, rect.Top,
+                Math.Max(1, rect.Right - rect.Left), Math.Max(1, rect.Bottom - rect.Top));
+            bool visibleOnSomeScreen = false;
+            foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+            {
+                if (screen.Bounds.IntersectsWith(widgetRect))
+                {
+                    visibleOnSomeScreen = true;
+                    break;
+                }
+            }
+
+            if (visibleOnSomeScreen) return;
+
+            var wa = System.Windows.Forms.Screen.PrimaryScreen.WorkingArea;
+            Point fallback = DeviceToLogical(new Point(wa.Left + 120, wa.Top + 120));
+            Left = fallback.X;
+            Top = fallback.Y;
+            _config.pos_x = (int)Left;
+            _config.pos_y = (int)Top;
+            ConfigManager.Save(_config);
         }
 
         private void InitInfoPopup()
@@ -333,43 +444,100 @@ namespace CodexMonitor
         {
             try
             {
-                var source = PresentationSource.FromVisual(this);
-                Point devPoint = new Point(x + CanvasW / 2.0, y + CanvasH / 2.0);
-                if (source != null && source.CompositionTarget != null)
-                {
-                    devPoint = source.CompositionTarget.TransformToDevice.Transform(devPoint);
-                }
-
-                var point = new System.Drawing.Point((int)devPoint.X, (int)devPoint.Y);
+                Point devPoint = LogicalToDevice(new Point(x + CanvasW / 2.0, y + CanvasH / 2.0));
+                var point = new System.Drawing.Point((int)Math.Round(devPoint.X), (int)Math.Round(devPoint.Y));
                 var screen = System.Windows.Forms.Screen.FromPoint(point);
                 if (screen != null)
                 {
                     var wa = screen.WorkingArea;
-                    if (source != null && source.CompositionTarget != null)
-                    {
-                        var fromDev = source.CompositionTarget.TransformFromDevice;
-                        Point p1 = fromDev.Transform(new Point(wa.Left, wa.Top));
-                        Point p2 = fromDev.Transform(new Point(wa.Right, wa.Bottom));
-                        return new Rect(p1.X, p1.Y, Math.Max(100.0, p2.X - p1.X), Math.Max(100.0, p2.Y - p1.Y));
-                    }
-                    return new Rect(wa.Left, wa.Top, wa.Width, wa.Height);
+                    Point p1 = DeviceToLogical(new Point(wa.Left, wa.Top));
+                    Point p2 = DeviceToLogical(new Point(wa.Right, wa.Bottom));
+                    return new Rect(p1.X, p1.Y, Math.Max(100.0, p2.X - p1.X), Math.Max(100.0, p2.Y - p1.Y));
                 }
             }
             catch { }
             return new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
         }
 
+        private Rect GetVirtualDesktopBounds()
+        {
+            var cacheNow = DateTime.UtcNow;
+            if (_virtualDesktopBoundsCache.Width > 0 &&
+                (cacheNow - _virtualDesktopBoundsCachedAt).TotalMilliseconds < VirtualBoundsCacheMs)
+            {
+                return _virtualDesktopBoundsCache;
+            }
+
+            Rect result;
+            try
+            {
+                int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                int right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                int bottom = top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                Point p1 = DeviceToLogical(new Point(left, top));
+                Point p2 = DeviceToLogical(new Point(right, bottom));
+                result = new Rect(p1.X, p1.Y, Math.Max(100.0, p2.X - p1.X), Math.Max(100.0, p2.Y - p1.Y));
+            }
+            catch
+            {
+                result = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+                    SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+            }
+
+            _virtualDesktopBoundsCache = result;
+            _virtualDesktopBoundsCachedAt = cacheNow;
+            return result;
+        }
+
+        private Point LogicalToDevice(Point logicalPoint)
+        {
+            var source = PresentationSource.FromVisual(this);
+            if (source == null || source.CompositionTarget == null) return logicalPoint;
+
+            Point local = new Point(logicalPoint.X - Left, logicalPoint.Y - Top);
+            Point localDevice = source.CompositionTarget.TransformToDevice.Transform(local);
+            RECT rect;
+            if (_hwnd != IntPtr.Zero && GetWindowRect(_hwnd, out rect))
+            {
+                localDevice.X += rect.Left;
+                localDevice.Y += rect.Top;
+            }
+            return localDevice;
+        }
+
+        private Point DeviceToLogical(Point devicePoint)
+        {
+            var source = PresentationSource.FromVisual(this);
+            if (source == null || source.CompositionTarget == null) return devicePoint;
+
+            RECT rect;
+            if (_hwnd != IntPtr.Zero && GetWindowRect(_hwnd, out rect))
+            {
+                devicePoint.X -= rect.Left;
+                devicePoint.Y -= rect.Top;
+            }
+
+            Point local = source.CompositionTarget.TransformFromDevice.Transform(devicePoint);
+            return new Point(Left + local.X, Top + local.Y);
+        }
+
+        private Point GetWidgetCenterDevice()
+        {
+            RECT rect;
+            if (_hwnd != IntPtr.Zero && GetWindowRect(_hwnd, out rect))
+            {
+                return new Point((rect.Left + rect.Right) / 2.0, (rect.Top + rect.Bottom) / 2.0);
+            }
+
+            return LogicalToDevice(new Point(Left + CanvasW / 2.0, Top + CanvasH / 2.0));
+        }
+
         private Point GetLogicalCursorPos()
         {
             POINT pt;
             GetCursorPos(out pt);
-            var source = PresentationSource.FromVisual(this);
-            if (source != null && source.CompositionTarget != null)
-            {
-                var matrix = source.CompositionTarget.TransformFromDevice;
-                return matrix.Transform(new Point(pt.X, pt.Y));
-            }
-            return new Point(pt.X, pt.Y);
+            return DeviceToLogical(new Point(pt.X, pt.Y));
         }
 
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
@@ -392,23 +560,28 @@ namespace CodexMonitor
             base.OnMouseMove(e);
             if (_isDragging && e.LeftButton == MouseButtonState.Pressed)
             {
-                var curScreenPos = GetLogicalCursorPos();
-                double newX = curScreenPos.X - _dragStartOffset.X;
-                double newY = curScreenPos.Y - _dragStartOffset.Y;
+                // 使用窗口内相对位移，不再把当前屏幕的物理像素按主屏 DPI 反算。
+                // 这样拖过不同缩放比例的显示器时，球和尾迹仍共享同一套 WPF 坐标。
+                Point currentPos = e.GetPosition(this);
+                double newX = Left + currentPos.X - _dragStartOffset.X;
+                double newY = Top + currentPos.Y - _dragStartOffset.Y;
 
-                double vLeft = SystemParameters.VirtualScreenLeft;
-                double vTop = SystemParameters.VirtualScreenTop;
-                double vRight = vLeft + SystemParameters.VirtualScreenWidth;
-                double vBottom = vTop + SystemParameters.VirtualScreenHeight;
+                Rect virtualBounds = GetVirtualDesktopBounds();
+                double vLeft = virtualBounds.Left;
+                double vTop = virtualBounds.Top;
+                double vRight = virtualBounds.Right;
+                double vBottom = virtualBounds.Bottom;
 
                 newX = Math.Max(vLeft, Math.Min(vRight - Width, newX));
                 newY = Math.Max(vTop, Math.Min(vBottom - Height, newY));
 
+                bool shapeChanged = false;
                 if (_isDocked)
                 {
                     _isDocked = false;
                     _dockSide = "none";
                     _morphProg = 1.0;
+                    shapeChanged = true;
                 }
 
                 Left = newX;
@@ -416,10 +589,9 @@ namespace CodexMonitor
 
                 if (_trail != null)
                 {
-                    _trail.EnsureTopmost();
-                    _trail.AddPoint(new Point(newX + CanvasW / 2.0, newY + CanvasH / 2.0));
+                    _trail.AddPoint(GetWidgetCenterDevice());
                 }
-                InvalidateVisual();
+                if (shapeChanged) InvalidateVisual();
             }
         }
 
