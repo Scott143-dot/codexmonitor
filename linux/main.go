@@ -538,10 +538,10 @@ func updateAutostartMenuItem() {
 }
 
 func onReady() {
-	systray.SetTitle("⚡ --")
+	systray.SetTitle("--")
 	systray.SetTooltip("Codex Monitor (Linux Native Standalone)")
 
-	mStatus = systray.AddMenuItem("⚡ 剩余额度: --", "")
+	mStatus = systray.AddMenuItem("剩余额度: --", "")
 	mStatus.Disable()
 	systray.AddSeparator()
 
@@ -571,11 +571,11 @@ func onReady() {
 		currentData = d
 		dataMutex.Unlock()
 
-		systray.SetTitle(fmt.Sprintf("⚡ %s (%s)", d.PercentageStr, d.ResetCountdown))
+		systray.SetTitle(fmt.Sprintf("%s (%s)", d.PercentageStr, d.ResetCountdown))
 		systray.SetTooltip(fmt.Sprintf("Codex: %s (重置: %s)", d.PercentageStr, d.ResetCountdown))
 		systray.SetIcon(generateTrayIcon(d.Percentage))
 
-		mStatus.SetTitle(fmt.Sprintf("⚡ 剩余额度: %s (倒计时: %s)", d.PercentageStr, d.ResetCountdown))
+		mStatus.SetTitle(fmt.Sprintf("剩余额度: %s (倒计时: %s)", d.PercentageStr, d.ResetCountdown))
 		mEmail.SetTitle(fmt.Sprintf("📧 账号: %s", d.Email))
 		mPlan.SetTitle(fmt.Sprintf("💎 类型: %s", d.PlanType))
 		mExpiry.SetTitle(fmt.Sprintf("📅 到期: %s", d.SubscriptionExpiry))
@@ -611,7 +611,7 @@ func runCliDashboard(watch bool) {
 		d := fetchUsageData()
 		fmt.Print("\033[2J\033[H") // 清屏
 		fmt.Println("==================================================")
-		fmt.Println("  ⚡ Codex Monitor (Linux Standalone ELF Binary)")
+		fmt.Println("  Codex Monitor (Linux Standalone ELF Binary)")
 		fmt.Println("==================================================")
 		fmt.Printf("  📧 账号: %s\n", d.Email)
 		fmt.Printf("  💎 计划: %s\n", d.PlanType)
@@ -621,7 +621,7 @@ func runCliDashboard(watch bool) {
 		barLen := 20
 		filled := int((d.Percentage / 100.0) * float64(barLen))
 		bar := strings.Repeat("#", filled) + strings.Repeat("-", barLen-filled)
-		fmt.Printf("  ⚡ 额度: %4s [%s] (%s)\n", d.PercentageStr, bar, d.ResetCountdown)
+		fmt.Printf("  额度: %4s [%s] (%s)\n", d.PercentageStr, bar, d.ResetCountdown)
 		fmt.Println("==================================================")
 		if watch {
 			fmt.Printf("  🕒 刷新时间: %s (按 Ctrl+C 退出)\n", time.Now().Format("15:04:05"))
