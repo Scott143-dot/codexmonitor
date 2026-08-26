@@ -85,6 +85,11 @@ namespace CodexMonitor
         private double _physicalWidth;
         private double _physicalHeight;
         private const double MinPointIntervalMs = 10.0;
+        // 单屏时固定覆盖当前显示器，避免拖动过程中反复移动 layered HWND。
+        // 多屏仍使用局部窗口，避免一个透明窗口覆盖整个虚拟桌面。
+        private readonly bool _useFixedMonitorOverlay;
+        private bool _fixedMonitorBoundsInitialized;
+        private bool _nativeBoundsSet;
 
         private static readonly SolidColorBrush TransBrush = Brushes.Transparent;
 
@@ -124,6 +129,7 @@ namespace CodexMonitor
             Height = MinOverlaySize;
             _physicalWidth = MinOverlaySize;
             _physicalHeight = MinOverlaySize;
+            _useFixedMonitorOverlay = System.Windows.Forms.Screen.AllScreens.Length <= 1;
         }
 
         private static readonly Color[] RainbowColors =
@@ -263,6 +269,19 @@ namespace CodexMonitor
                 }
                 _lastAcceptedPointAt = now;
 
+                // 单屏拖动时沿用旧版“固定画布”的行为。只有切换到另一台显示器
+                // 时才重设边界并清理旧轨迹，避免每隔几百像素触发 DWM 重定位。
+                if (_useFixedMonitorOverlay && _fixedMonitorBoundsInitialized &&
+                    !IsInsidePhysicalBounds(screenPt))
+                {
+                    _segments.Clear();
+                    _particles.Clear();
+                    _lastPt = screenPt;
+                    _accumDist = 0.0;
+                    EnsureFixedMonitorBoundsUnsafe(screenPt);
+                    return;
+                }
+
                 if (!_lastPt.HasValue)
                 {
                     _lastPt = screenPt;
@@ -303,6 +322,7 @@ namespace CodexMonitor
                             P1 = _lastPt.Value,
                             P2 = screenPt,
                             MainLine = mainPts,
+                            MainGeometry = BuildGeometry(mainPts),
                             CreatedT = now,
                             Life = 0.65,
                             IsMain = true
@@ -317,6 +337,7 @@ namespace CodexMonitor
                             P1 = pSub1,
                             P2 = pSub2,
                             MainLine = subPts,
+                            MainGeometry = BuildGeometry(subPts),
                             CreatedT = now,
                             Life = 0.5,
                             IsMain = false
@@ -439,6 +460,12 @@ namespace CodexMonitor
 
         private void RefreshOverlayBoundsUnsafe(Point latestPoint)
         {
+            if (_useFixedMonitorOverlay)
+            {
+                EnsureFixedMonitorBoundsUnsafe(latestPoint);
+                return;
+            }
+
             double minX = latestPoint.X;
             double minY = latestPoint.Y;
             double maxX = latestPoint.X;
@@ -499,6 +526,32 @@ namespace CodexMonitor
             SetPhysicalBoundsUnsafe(left, top, width, height);
         }
 
+        private bool IsInsidePhysicalBounds(Point point)
+        {
+            return point.X >= _physicalLeft && point.X < _physicalLeft + _physicalWidth &&
+                point.Y >= _physicalTop && point.Y < _physicalTop + _physicalHeight;
+        }
+
+        private void EnsureFixedMonitorBoundsUnsafe(Point latestPoint)
+        {
+            if (!_useFixedMonitorOverlay) return;
+
+            var screen = System.Windows.Forms.Screen.FromPoint(
+                new System.Drawing.Point((int)Math.Round(latestPoint.X), (int)Math.Round(latestPoint.Y)));
+            var bounds = screen.Bounds;
+            if (_fixedMonitorBoundsInitialized &&
+                Math.Abs(_physicalLeft - bounds.Left) < 0.5 &&
+                Math.Abs(_physicalTop - bounds.Top) < 0.5 &&
+                Math.Abs(_physicalWidth - bounds.Width) < 0.5 &&
+                Math.Abs(_physicalHeight - bounds.Height) < 0.5)
+            {
+                return;
+            }
+
+            SetPhysicalBoundsUnsafe(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+            _fixedMonitorBoundsInitialized = true;
+        }
+
         private static void IncludePoint(Point point, ref double minX, ref double minY,
             ref double maxX, ref double maxY)
         {
@@ -531,10 +584,13 @@ namespace CodexMonitor
             double heightDip = height / _dpiScale;
             if (Math.Abs(Width - widthDip) > 0.5) Width = widthDip;
             if (Math.Abs(Height - heightDip) > 0.5) Height = heightDip;
+            uint flags = SWP_NOACTIVATE;
+            if (!_nativeBoundsSet) flags |= SWP_SHOWWINDOW;
             SetWindowPos(_hwnd, HWND_TOPMOST,
                 (int)Math.Round(left), (int)Math.Round(top),
                 Math.Max(1, (int)Math.Round(width)), Math.Max(1, (int)Math.Round(height)),
-                SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                flags);
+            _nativeBoundsSet = true;
             // GetDpiForWindow 只在窗口实际跨屏后才会变化；保留一次轻量读取，
             // 但不再因为每次移动都重新设置 WPF 尺寸。
             UpdateDpiScale();
@@ -700,12 +756,20 @@ namespace CodexMonitor
                 var glowPen = seg.IsMain ? _laserGlowMainPens[bucket] : _laserGlowSubPens[bucket];
                 var corePen = seg.IsMain ? _laserCoreMainPens[bucket] : _laserCoreSubPens[bucket];
 
-                // 闪电尾迹使用短折线直接绘制，不为每个片段创建 StreamGeometry。
-                // 这样保留锯齿闪电效果，同时显著降低高速拖拽时的 GC 和冻结对象开销。
-                for (int i = 1; i < seg.MainLine.Count; i++)
+                // 几何在片段创建时缓存；每帧只提交两次绘制，避免每条闪电的
+                // 十几个折线点都变成独立的 DrawingContext 调用。
+                if (seg.MainGeometry != null)
                 {
-                    dc.DrawLine(glowPen, seg.MainLine[i - 1], seg.MainLine[i]);
-                    dc.DrawLine(corePen, seg.MainLine[i - 1], seg.MainLine[i]);
+                    dc.DrawGeometry(null, glowPen, seg.MainGeometry);
+                    dc.DrawGeometry(null, corePen, seg.MainGeometry);
+                }
+                else
+                {
+                    for (int i = 1; i < seg.MainLine.Count; i++)
+                    {
+                        dc.DrawLine(glowPen, seg.MainLine[i - 1], seg.MainLine[i]);
+                        dc.DrawLine(corePen, seg.MainLine[i - 1], seg.MainLine[i]);
+                    }
                 }
             }
         }
