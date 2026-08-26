@@ -597,7 +597,9 @@ func onReady() {
 
 	var refreshLock sync.Mutex
 	updateData := func() {
-		refreshLock.Lock()
+		if !refreshLock.TryLock() {
+			return
+		}
 		defer refreshLock.Unlock()
 
 		// 刷新期间不改动托盘和详情内容，保持上一次有效状态，
@@ -606,7 +608,6 @@ func onReady() {
 		previous := currentData
 		dataMutex.RUnlock()
 
-		mRefresh.Disable()
 		fresh := fetchUsageData()
 
 		// 请求失败时继续保留额度和倒计时，只把错误显示在重置详情中。
@@ -621,7 +622,6 @@ func onReady() {
 		currentData = fresh
 		dataMutex.Unlock()
 		publishData(fresh)
-		mRefresh.Enable()
 	}
 
 	go func() {
