@@ -299,7 +299,6 @@ namespace CodexMonitor
                             P1 = _lastPt.Value,
                             P2 = screenPt,
                             MainLine = mainPts,
-                            MainGeometry = BuildGeometry(mainPts),
                             CreatedT = now,
                             Life = 0.65,
                             IsMain = true
@@ -314,7 +313,6 @@ namespace CodexMonitor
                             P1 = pSub1,
                             P2 = pSub2,
                             MainLine = subPts,
-                            MainGeometry = BuildGeometry(subPts),
                             CreatedT = now,
                             Life = 0.5,
                             IsMain = false
@@ -694,11 +692,13 @@ namespace CodexMonitor
                 var glowPen = seg.IsMain ? _laserGlowMainPens[bucket] : _laserGlowSubPens[bucket];
                 var corePen = seg.IsMain ? _laserCoreMainPens[bucket] : _laserCoreSubPens[bucket];
 
-                var geo = seg.MainGeometry;
-                if (geo == null) continue;
-
-                dc.DrawGeometry(null, glowPen, geo);
-                dc.DrawGeometry(null, corePen, geo);
+                // 闪电尾迹使用短折线直接绘制，不为每个片段创建 StreamGeometry。
+                // 这样保留锯齿闪电效果，同时显著降低高速拖拽时的 GC 和冻结对象开销。
+                for (int i = 1; i < seg.MainLine.Count; i++)
+                {
+                    dc.DrawLine(glowPen, seg.MainLine[i - 1], seg.MainLine[i]);
+                    dc.DrawLine(corePen, seg.MainLine[i - 1], seg.MainLine[i]);
+                }
             }
         }
 
