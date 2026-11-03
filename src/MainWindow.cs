@@ -42,6 +42,7 @@ namespace CodexMonitor
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SWP_SHOWWINDOW = 0x0040;
+        private const uint SWP_ASYNCWINDOWPOS = 0x4000;
         private const int SM_XVIRTUALSCREEN = 76;
         private const int SM_YVIRTUALSCREEN = 77;
         private const int SM_CXVIRTUALSCREEN = 78;
@@ -82,7 +83,8 @@ namespace CodexMonitor
         private DateTime _menuLeaveStart;
 
         private readonly DispatcherTimer _morphTimer;
-        private readonly DispatcherTimer _topmostTimer;
+        private readonly System.Threading.Timer _topmostTimer;
+        private int _topmostReasserting;
         private double _morphStartVal;
         private double _morphTargetVal;
         private DateTime _morphStartTime;
@@ -141,10 +143,9 @@ namespace CodexMonitor
             };
             _morphTimer.Tick += OnMorphTimerTick;
 
-            // 其它置顶窗口、全屏应用或系统窗口可能在运行期间改变 Z 序。
-            // 每秒只做一次无激活的 Win32 校正，避免磁吸后悬浮球逐渐掉到普通窗口下面。
-            _topmostTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            _topmostTimer.Tick += (s, e) => EnsureTopmost();
+            // 在线程池维持 Z 序，不依赖 WPF UI Dispatcher 是否繁忙。
+            _topmostTimer = new System.Threading.Timer(ReassertTopmost,
+                null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
 
             InitInfoPopup();
 
@@ -199,12 +200,12 @@ namespace CodexMonitor
                 if (_isDocked) NormalizeDockedPosition();
                 else NormalizeFreePosition();
                 EnsureTopmost();
-                _topmostTimer.Start();
+                _topmostTimer.Change(250, 500);
                 DoRefreshQuota();
             };
             Closed += (s, e) =>
             {
-                _topmostTimer.Stop();
+                _topmostTimer.Dispose();
                 _hoverTimer.Stop();
                 _dragTimer.Stop();
                 _autoSyncTimer.Stop();
@@ -222,14 +223,27 @@ namespace CodexMonitor
 
         private void EnsureTopmost()
         {
+            // 先置顶尾迹，再置顶悬浮球，让球始终位于两层的最前面。
+            if (_trail != null) _trail.EnsureTopmost();
+
             if (_hwnd != IntPtr.Zero)
             {
                 SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
             }
+        }
 
-            // 尾迹窗口必须在悬浮球之上，但不能抢焦点。
-            if (_trail != null) _trail.EnsureTopmost();
+        private void ReassertTopmost(object state)
+        {
+            if (System.Threading.Interlocked.Exchange(ref _topmostReasserting, 1) != 0) return;
+            try
+            {
+                EnsureTopmost();
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _topmostReasserting, 0);
+            }
         }
 
         private void NormalizeDockedPosition()
@@ -564,7 +578,7 @@ namespace CodexMonitor
             if (_trail != null)
             {
                 _trail.ResetLastPoint();
-                _trail.EnsureTopmost();
+                EnsureTopmost();
             }
             _hasPendingDrag = false;
             _dragTimer.Start();
